@@ -1,7 +1,6 @@
 // src/screens/Auth/ForgotPasswordEmailScreen.tsx
-import React, { useState, useCallback } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
-  SafeAreaView,
   View,
   Text,
   StyleSheet,
@@ -9,14 +8,20 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import AuthTextInput from '../../../components/common/AuthTextInput';
 import PrimaryButton from '../../../components/common/PrimaryButton';
-import { colors, spacing, typography } from '../../../styles/theme';
+import { useTheme } from '../../../styles/theme';
 import api from '../../../api/axiosInstance';
 
 const ForgotPasswordEmailScreen = ({ navigation }: any) => {
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
+  const { colors, spacing, typography } = useTheme();
+  const styles = useMemo(
+    () => createStyles({ colors, spacing, typography }),
+    [colors, spacing, typography],
+  );
 
   const handleNext = useCallback(async () => {
     const trimmed = email.trim();
@@ -41,7 +46,7 @@ const ForgotPasswordEmailScreen = ({ navigation }: any) => {
 
     setLoading(true);
     try {
-      const response = await api.post('/email/send-verification', {
+      const response = await api.post('/api/email/send-verification', {
         email: trimmed,
       });
 
@@ -61,8 +66,6 @@ const ForgotPasswordEmailScreen = ({ navigation }: any) => {
         },
       ]);
     } catch (error: any) {
-      console.log('send-verification error:', error?.response?.data || error);
-
       const message =
         error?.response?.data?.message ||
         error?.response?.data ||
@@ -77,7 +80,7 @@ const ForgotPasswordEmailScreen = ({ navigation }: any) => {
   return (
     <SafeAreaView style={styles.container}>
       <KeyboardAvoidingView
-        style={{ flex: 1 }}
+        style={styles.keyboardArea}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <View style={styles.inner}>
@@ -112,26 +115,39 @@ const ForgotPasswordEmailScreen = ({ navigation }: any) => {
 
 export default ForgotPasswordEmailScreen;
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  inner: {
-    flex: 1,
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.xl,
-  },
-  title: {
-    ...typography.h1,
-    marginBottom: spacing.sm,
-  },
-  description: {
-    ...typography.body,
-    color: colors.textSecondary,
-    marginBottom: spacing.xl,
-  },
-  buttonArea: {
-    marginTop: spacing.lg,
-  },
-});
+const createStyles = ({
+  colors,
+  spacing,
+  typography,
+}: {
+  colors: ReturnType<typeof useTheme>['colors'];
+  spacing: ReturnType<typeof useTheme>['spacing'];
+  typography: ReturnType<typeof useTheme>['typography'];
+}) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    keyboardArea: {
+      flex: 1,
+    },
+    inner: {
+      flex: 1,
+      paddingHorizontal: spacing.lg,
+      paddingTop: spacing.xl,
+    },
+    title: {
+      ...typography.h1,
+      marginBottom: spacing.sm,
+      color: colors.textPrimary,
+    },
+    description: {
+      ...typography.body,
+      color: colors.textSecondary,
+      marginBottom: spacing.xl,
+    },
+    buttonArea: {
+      marginTop: spacing.lg,
+    },
+  });

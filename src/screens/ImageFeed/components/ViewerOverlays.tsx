@@ -2,19 +2,16 @@
 import React, { useMemo, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image, Platform, Pressable } from 'react-native';
 import Icon from 'react-native-vector-icons/Ionicons';
-import Config from 'react-native-config';
 import type { ImageFeedViewerResponse } from '../../../api/imageFeedApi';
+import { buildProfileUri } from '../../../utils/profileImage';
+import { useProfileNavigation } from '../../../hooks/useProfileNavigation';
+import { useRequireLogin } from '../../../hooks/useRequireLogin';
 
-const PROFILE_BASE_URL = Config.PROFILE_BUCKET ?? '';
 const ICON_SIZE = 34;
-
-const joinUrl = (base?: string, path?: string) => {
-  if (!path) return null;
-  if (!base) return path;
-  const b = base.endsWith('/') ? base.slice(0, -1) : base;
-  const p = path.startsWith('/') ? path.slice(1) : path;
-  return `${b}/${p}`;
-};
+const TOP_BASE = Platform.OS === 'android' ? 12 : 52;
+const BACK_BUTTON_HEIGHT = 44;
+const TOP_GAP = 8;
+const TOP_CHIP_TOP = TOP_BASE + BACK_BUTTON_HEIGHT + TOP_GAP;
 
 export type FeedMetaUI = {
   likeCount: number;
@@ -33,10 +30,13 @@ type Props = {
 
   meta: FeedMetaUI;
   onToggleLike: () => void;
+  onPressLikeCount?: () => void;
   onPressComment: () => void;
 
   onPressLocation?: () => void;
   onPressMenu?: () => void;
+  showActions?: boolean;
+  showFooter?: boolean;
 };
 
 export default function ViewerOverlays({
@@ -45,22 +45,27 @@ export default function ViewerOverlays({
   activeData,
   meta,
   onToggleLike,
+  onPressLikeCount,
   onPressComment,
   onPressLocation,
   onPressMenu,
+  showActions = true,
+  showFooter = true,
 }: Props) {
   const profileUri = useMemo(
-    () => joinUrl(PROFILE_BASE_URL, activeData?.profileImageUrl ?? undefined),
-    [activeData?.profileImageUrl],
+    () => buildProfileUri(activeData?.username, activeData?.profileImageUrl),
+    [activeData?.profileImageUrl, activeData?.username],
   );
+  const { navigateToProfile } = useProfileNavigation();
+  const requireLogin = useRequireLogin();
 
   const [contentExpanded, setContentExpanded] = useState(false);
   const toggleExpanded = useCallback(() => setContentExpanded((v) => !v), []);
 
   if (!uiVisible) return null;
 
-  const storeName = activeData?.storeName ?? null;
-  const location = activeData?.location ?? null;
+  const storeName = activeData?.storeName?.trim() || null;
+  const location = activeData?.location?.trim() || null;
 
   const content = activeData?.content ?? '';
   const feedTitle = activeData?.feedTitle ?? null;
@@ -78,20 +83,68 @@ export default function ViewerOverlays({
         </TouchableOpacity>
       </View>
 
+      {(location || storeName) && (
+        <View pointerEvents="none" style={[styles.topChipContainer, { top: TOP_CHIP_TOP }]}>
+          <View style={styles.topChipStack}>
+            {location ? (
+              <View style={styles.topChip}>
+                <Icon name="location-outline" size={16} color="#fff" />
+                <Text style={styles.topChipText} numberOfLines={1}>
+                  {location}
+                </Text>
+              </View>
+            ) : null}
+
+            {storeName ? (
+              <View style={[styles.topChip, styles.topChipSecondary]}>
+                <Icon name="restaurant-outline" size={16} color="#fff" />
+                <Text style={styles.topChipText} numberOfLines={1}>
+                  {storeName}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        </View>
+      )}
+
       {/* ✅ Right Action Stack (VideoOverlayUI style) */}
-      {activeData && (
+      {showActions && activeData && (
         <View style={styles.rightContainer} pointerEvents="box-none">
           <View style={styles.stack}>
-            <TouchableOpacity style={styles.item} onPress={onToggleLike}>
+            <TouchableOpacity
+              style={styles.item}
+              onPress={() => {
+                if (!requireLogin({ message: '좋아요는 로그인 후 사용할 수 있어요.' })) return;
+                onToggleLike();
+              }}
+            >
               <Icon
                 name={meta.isLiked ? 'heart' : 'heart-outline'}
                 size={ICON_SIZE}
                 color={meta.isLiked ? '#ff4d4f' : '#fff'}
               />
-              <Text style={styles.count}>{meta.likeCount}</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  if (!requireLogin({ message: '좋아요 목록은 로그인 후 볼 수 있어요.' })) {
+                    return;
+                  }
+                  onPressLikeCount?.();
+                }}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                activeOpacity={onPressLikeCount ? 0.7 : 1}
+                disabled={!onPressLikeCount}
+              >
+                <Text style={styles.count}>{meta.likeCount}</Text>
+              </TouchableOpacity>
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.item} onPress={onPressComment}>
+            <TouchableOpacity
+              style={styles.item}
+              onPress={() => {
+                if (!requireLogin({ message: '댓글은 로그인 후 작성할 수 있어요.' })) return;
+                onPressComment();
+              }}
+            >
               <Icon name="chatbubble-outline" size={ICON_SIZE} color="#fff" />
               <Text style={styles.count}>{meta.commentCount}</Text>
             </TouchableOpacity>
@@ -104,7 +157,7 @@ export default function ViewerOverlays({
 
             {!!onPressMenu && (
               <TouchableOpacity style={styles.item} onPress={onPressMenu}>
-                <Icon name="restaurant-outline" size={ICON_SIZE} color="#fff" />
+                <Icon name="ellipsis-horizontal" size={ICON_SIZE} color="#fff" />
               </TouchableOpacity>
             )}
           </View>
@@ -112,39 +165,8 @@ export default function ViewerOverlays({
       )}
 
       {/* ✅ Bottom Caption */}
-      {activeData && (
+      {showFooter && activeData && (
         <View style={styles.bottomCaption} pointerEvents="box-none">
-          {/* 1) 프로필 + 닉네임 (요청대로 “합친 로우” 유지) */}
-          <View style={styles.userRow}>
-            {profileUri ? (
-              <Image source={{ uri: profileUri }} style={styles.avatar} />
-            ) : (
-              <View style={[styles.avatar, styles.avatarPlaceholder]} />
-            )}
-
-            <View style={{ flex: 1 }}>
-              <Text style={styles.userLine} numberOfLines={1}>
-                {activeData.nickName ?? activeData.username}
-              </Text>
-            </View>
-          </View>
-
-          {/* ✅ 2) 식당이름 + 주소를 “프로필/닉네임 로우 밑”으로 내림 */}
-          {(!!storeName || !!location) && (
-            <View style={styles.placeBlock}>
-              {!!storeName && (
-                <Text style={styles.storeLine} numberOfLines={1}>
-                  {storeName}
-                </Text>
-              )}
-              {!!location && (
-                <Text style={styles.placeLine} numberOfLines={1}>
-                  {location}
-                </Text>
-              )}
-            </View>
-          )}
-
           {/* 3) 피드 제목 */}
           {!!feedTitle && (
             <Text style={styles.feedTitle} numberOfLines={1}>
@@ -168,6 +190,25 @@ export default function ViewerOverlays({
               )}
             </Pressable>
           )}
+
+          {/* 1) 프로필 + 닉네임 */}
+          <Pressable
+            style={styles.userRow}
+            onPress={() => navigateToProfile(activeData?.username)}
+          >
+            {profileUri ? (
+              <Image source={{ uri: profileUri }} style={styles.avatar} />
+            ) : (
+              <View style={[styles.avatar, styles.avatarPlaceholder]} />
+            )}
+
+            <View style={{ flex: 1 }}>
+              <Text style={styles.userLine} numberOfLines={1}>
+                {activeData.nickName ?? activeData.username}
+              </Text>
+            </View>
+          </Pressable>
+
         </View>
       )}
     </>
@@ -194,6 +235,32 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  topChipContainer: {
+    position: 'absolute',
+    right: 12,
+    left: 12,
+    alignItems: 'flex-end',
+  },
+  topChipStack: {
+    alignItems: 'flex-end',
+    gap: 6,
+  },
+  topChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  topChipSecondary: {
+    alignSelf: 'flex-end',
+  },
+  topChipText: {
+    color: '#fff',
+    fontSize: 12,
+    marginLeft: 6,
+  },
 
   // ✅ Right stack
   rightContainer: {
@@ -205,7 +272,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 20,
   },
-  item: { alignItems: 'center' },
+  item: {
+    alignItems: 'center',
+    paddingVertical: 4,
+    paddingHorizontal: 2,
+  },
   count: {
     marginTop: 6,
     color: 'rgba(255,255,255,0.9)',
@@ -218,7 +289,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 12,
     right: 78, // 우측 스택 피하기
-    bottom: 20,
+    bottom: 36,
   },
 
   // 1) 프로필 + 닉네임 row
@@ -226,7 +297,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    marginBottom: 8,
+    marginTop: 12,
   },
   avatar: {
     width: 42,
@@ -239,21 +310,6 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '900',
-  },
-
-  // 2) place block (moved under userRow)
-  placeBlock: {
-    marginBottom: 10,
-  },
-  storeLine: {
-    color: '#fff',
-    fontSize: 15,
-    fontWeight: '900',
-  },
-  placeLine: {
-    color: 'rgba(255,255,255,0.75)',
-    fontSize: 13,
-    marginTop: 4,
   },
 
   // 3) title

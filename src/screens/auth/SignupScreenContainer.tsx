@@ -1,10 +1,17 @@
 // src/screens/Auth/SignupScreenContainer.tsx
 import React from 'react';
 import { Alert } from 'react-native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+
 import SignupScreen from './SignupScreen';
 import api from '../../api/axiosInstance'; // 🔹 실제 경로 맞게 수정
+import type { AuthStackParamList } from '../../navigation/AuthStack';
 
-const SignupScreenContainer = ({ navigation }: any) => {
+type SignupScreenContainerProps = {
+  navigation: NativeStackNavigationProp<AuthStackParamList, 'Signup'>;
+};
+
+const SignupScreenContainer: React.FC<SignupScreenContainerProps> = ({ navigation }) => {
   const handleSubmit = async ({
     id,
     password,
@@ -22,9 +29,7 @@ const SignupScreenContainer = ({ navigation }: any) => {
         nickname,
       };
 
-      const res = await api.post('/auth/signup', payload);
-
-      console.log('signup res', res.data);
+      await api.post('/api/auth/signup', payload);
 
       Alert.alert('회원가입 완료', '이제 로그인해보세요!', [
         {
@@ -33,8 +38,6 @@ const SignupScreenContainer = ({ navigation }: any) => {
         },
       ]);
     } catch (error: any) {
-      console.log('signup error', error?.response || error);
-
       // 서버에서 에러 메시지를 내려주고 있다면 그걸 우선 사용
       const message =
         error?.response?.data?.message ||
@@ -52,10 +55,10 @@ const SignupScreenContainer = ({ navigation }: any) => {
         navigation.goBack();
       }}
       onOpenTerms={() => {
-        // TODO: 이용약관 화면 이동
+        navigation.navigate('LegalDocument', { documentType: 'terms' });
       }}
       onOpenPrivacy={() => {
-        // TODO: 개인정보 처리방침 화면 이동
+        navigation.navigate('LegalDocument', { documentType: 'privacy' });
       }}
     />
   );

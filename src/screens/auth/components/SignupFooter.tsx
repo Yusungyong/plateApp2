@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   View,
   Text,
@@ -6,9 +6,7 @@ import {
   StyleSheet,
 } from 'react-native';
 import PrimaryButton from '../../../components/common/PrimaryButton';
-import { colors, spacing, typography, radius } from '../../../styles/theme';
-
-const BRAND_COLOR = '#FF7F50';
+import { useTheme } from '../../../styles/theme';
 const HIT_SLOP = { top: 8, bottom: 8, left: 8, right: 8 };
 
 type Props = {
@@ -30,6 +28,11 @@ const SignupFooter: React.FC<Props> = ({
   onNext,
   onBackToLogin,
 }) => {
+  const { colors, spacing, typography, radius } = useTheme();
+  const styles = useMemo(
+    () => createStyles({ colors, spacing, typography, radius }),
+    [colors, spacing, typography, radius],
+  );
   const nextButtonLabel = isLastStep
     ? isSubmitting
       ? '가입 중...'
@@ -77,42 +80,53 @@ const SignupFooter: React.FC<Props> = ({
   );
 };
 
-const styles = StyleSheet.create({
-  bottomArea: {
-    marginTop: spacing.xl,
-  },
-  buttonRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  secondaryButton: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: 'rgba(255,127,80,0.35)',
-    backgroundColor: '#FFFFFF',
-  },
-  secondaryButtonText: {
-    fontSize: 14,
-    color: BRAND_COLOR,
-  },
-  bottomLoginRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    marginTop: spacing.md,
-    alignItems: 'center',
-  },
-  bottomText: {
-    ...typography.bodySmall,
-    color: colors.textSecondary,
-    marginRight: spacing.xs,
-  },
-  bottomLoginLink: {
-    ...typography.bodySmall,
-    color: BRAND_COLOR,
-    fontWeight: '600',
-  },
-});
+const createStyles = ({
+  colors,
+  spacing,
+  typography,
+  radius,
+}: {
+  colors: ReturnType<typeof useTheme>['colors'];
+  spacing: ReturnType<typeof useTheme>['spacing'];
+  typography: ReturnType<typeof useTheme>['typography'];
+  radius: ReturnType<typeof useTheme>['radius'];
+}) =>
+  StyleSheet.create({
+    bottomArea: {
+      marginTop: spacing.xl,
+    },
+    buttonRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    secondaryButton: {
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm,
+      borderRadius: radius.lg,
+      borderWidth: 1,
+      borderColor: colors.brandPrimary,
+      backgroundColor: colors.background,
+    },
+    secondaryButtonText: {
+      fontSize: 14,
+      color: colors.brandPrimary,
+    },
+    bottomLoginRow: {
+      flexDirection: 'row',
+      justifyContent: 'center',
+      marginTop: spacing.md,
+      alignItems: 'center',
+    },
+    bottomText: {
+      ...typography.bodySmall,
+      color: colors.textSecondary,
+      marginRight: spacing.xs,
+    },
+    bottomLoginLink: {
+      ...typography.bodySmall,
+      color: colors.brandPrimary,
+      fontWeight: '600',
+    },
+  });
 
 export default SignupFooter;

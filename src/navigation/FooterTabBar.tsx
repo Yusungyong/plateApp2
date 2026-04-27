@@ -3,17 +3,19 @@ import React from 'react';
 import { View, TouchableOpacity, Text, StyleSheet } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useNavigation, useRoute } from '@react-navigation/native';
+import { useRequireLogin } from '../hooks/useRequireLogin';
 
 const FooterTabBar = () => {
   const navigation = useNavigation();
   const route = useRoute();
+  const requireLogin = useRequireLogin();
 
   const tabs = [
-    { name: 'Home', icon: 'home-outline', route: 'Home' },
-    { name: 'Search', icon: 'search-outline', route: 'Search' },
-    { name: 'Add', icon: 'add-circle-outline', route: 'Create' },
-    { name: 'Notice', icon: 'notifications-outline', route: 'Notification' },
-    { name: 'My', icon: 'person-outline', route: 'MyPage' },
+    { name: '홈', icon: 'home-outline', route: 'Home' },
+    { name: '검색', icon: 'search-outline', route: 'Search' },
+    { name: '추가', icon: 'add-circle-outline', route: 'VideoPostEditor', protected: true },
+    { name: '레시피', icon: 'restaurant-outline', route: 'Recipe' },
+    { name: '프로필', icon: 'person-outline', route: 'MyPage', protected: true },
   ];
 
   return (
@@ -25,14 +27,21 @@ const FooterTabBar = () => {
           <TouchableOpacity
             key={tab.route}
             style={styles.tab}
-            onPress={() => navigation.navigate(tab.route as never)}
+            onPress={() => {
+              if (tab.protected) {
+                const ok = requireLogin({
+                  message: '이 기능은 로그인 후 사용할 수 있어요.',
+                });
+                if (!ok) return;
+              }
+              navigation.navigate(tab.route as never);
+            }}
             activeOpacity={0.7}
           >
             <Ionicons
               name={tab.icon}
-              size={22}
-              // 활성 탭이면 진한 색, 아니면 회색
-              color={isActive ? '#111' : '#999'}
+              size={24}
+              color={isActive ? '#111' : '#8b91a1'}
             />
             <Text style={[styles.label, isActive && styles.labelActive]}>
               {tab.name}
@@ -49,18 +58,24 @@ export default FooterTabBar;
 const styles = StyleSheet.create({
   container: {
     flexDirection: 'row',
-    height: 60,
-    justifyContent: 'space-around',
+    height: '100%',
+    justifyContent: 'space-between',
     alignItems: 'center',
     backgroundColor: '#fff',
+    paddingHorizontal: 16,
+    paddingBottom: 6,
+    paddingTop: 8,
   },
   tab: {
+    flex: 1,
     alignItems: 'center',
+    paddingVertical: 6,
+    borderRadius: 16,
   },
   label: {
     fontSize: 11,
-    marginTop: 2,
-    color: '#999',
+    marginTop: 4,
+    color: '#8b91a1',
   },
   labelActive: {
     color: '#111',

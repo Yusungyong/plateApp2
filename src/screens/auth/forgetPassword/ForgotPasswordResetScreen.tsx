@@ -1,7 +1,6 @@
 // src/screens/auth/ForgotPasswordResetScreen.tsx
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
-  SafeAreaView,
   View,
   Text,
   StyleSheet,
@@ -9,13 +8,19 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import AuthTextInput from '../../../components/common/AuthTextInput';
 import PrimaryButton from '../../../components/common/PrimaryButton';
-import { colors, spacing, typography } from '../../../styles/theme';
+import { useTheme } from '../../../styles/theme';
 import api from '../../../api/axiosInstance';
 
 const ForgotPasswordResetScreen = ({ route, navigation }: any) => {
   const { email } = route.params;
+  const { colors, spacing, typography } = useTheme();
+  const styles = useMemo(
+    () => createStyles({ colors, spacing, typography }),
+    [colors, spacing, typography],
+  );
 
   const [pw1, setPw1] = useState('');
   const [pw2, setPw2] = useState('');
@@ -54,13 +59,13 @@ const ForgotPasswordResetScreen = ({ route, navigation }: any) => {
     try {
       setLoading(true);
 
-      await api.post('/auth/reset-password', {
+      await api.post('/api/auth/reset-password', {
         email,
         newPassword: pw1,
       });
 
       Alert.alert('완료', '비밀번호가 성공적으로 변경되었어요.', [
-        { text: '로그인하러 가기', onPress: () => navigation.navigate('Login') },
+        { text: '로그인하러 가기', onPress: () => navigation.navigate('SignIn') },
       ]);
     } catch (error: any) {
       const msg =
@@ -70,12 +75,12 @@ const ForgotPasswordResetScreen = ({ route, navigation }: any) => {
     } finally {
       setLoading(false);
     }
-  }, [pw1, pw2, isValid, isMismatch, isTooShort, email, navigation]);
+  }, [pw1, isValid, isMismatch, isTooShort, email, navigation]);
 
   return (
     <SafeAreaView style={styles.container}>
       <KeyboardAvoidingView
-        style={{ flex: 1 }}
+        style={styles.keyboardArea}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <View style={styles.inner}>
@@ -119,13 +124,23 @@ const ForgotPasswordResetScreen = ({ route, navigation }: any) => {
 
 export default ForgotPasswordResetScreen;
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.background },
-  inner: { flex: 1, paddingHorizontal: spacing.lg, paddingTop: spacing.xl },
-  title: { ...typography.h1, marginBottom: spacing.lg },
-  errorText: {
-    marginTop: spacing.xs,
-    fontSize: 12,
-    color: '#E64545',
-  },
-});
+const createStyles = ({
+  colors,
+  spacing,
+  typography,
+}: {
+  colors: ReturnType<typeof useTheme>['colors'];
+  spacing: ReturnType<typeof useTheme>['spacing'];
+  typography: ReturnType<typeof useTheme>['typography'];
+}) =>
+  StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    keyboardArea: { flex: 1 },
+    inner: { flex: 1, paddingHorizontal: spacing.lg, paddingTop: spacing.xl },
+    title: { ...typography.h1, marginBottom: spacing.lg, color: colors.textPrimary },
+    errorText: {
+      marginTop: spacing.xs,
+      fontSize: 12,
+      color: '#E64545',
+    },
+  });

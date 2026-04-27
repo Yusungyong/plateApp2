@@ -23,6 +23,14 @@ target 'plateAppNew' do
     :app_path => "#{Pod::Config.instance.installation_root}/.."
   )
 
+  pod 'FirebaseCore', :modular_headers => true
+  pod 'FirebaseCoreInternal', :modular_headers => true
+  pod 'GoogleUtilities', :modular_headers => true
+
+  pod 'GoogleMaps'
+  pod 'Google-Maps-iOS-Utils'
+  pod 'react-native-maps', :path => '../node_modules/react-native-maps', :subspecs => ['Maps', 'Google']
+
   post_install do |installer|
     react_native_post_install(
       installer,

@@ -34,7 +34,6 @@ export const getOrCreateGuestId = async (): Promise<string> => {
       return stored;
     }
   } catch (e) {
-    console.warn('[guestIdStorage] getItem error', e);
     // 에러가 나도 앱이 터지진 않게 새로 생성해서 진행
   }
 
@@ -43,8 +42,7 @@ export const getOrCreateGuestId = async (): Promise<string> => {
   try {
     await AsyncStorage.setItem(GUEST_ID_KEY, newId);
   } catch (e) {
-    console.warn('[guestIdStorage] setItem error', e);
-  }
+    }
 
   cachedGuestId = newId;
   return newId;
@@ -59,6 +57,5 @@ export const resetGuestId = async (): Promise<void> => {
   try {
     await AsyncStorage.removeItem(GUEST_ID_KEY);
   } catch (e) {
-    console.warn('[guestIdStorage] removeItem error', e);
-  }
+    }
 };

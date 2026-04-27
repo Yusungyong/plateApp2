@@ -2,7 +2,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchImageFeedContext, fetchImageFeedViewer, ImageFeedViewerResponse } from '../../../api/imageFeedApi';
 
-export function useImageFeedSwipeViewer(feedId: number) {
+export function useImageFeedSwipeViewer(
+  feedId: number,
+  options?: { feedIds?: number[]; initialIndex?: number; enabled?: boolean },
+) {
+  const enabled = options?.enabled ?? true;
   const [feedIds, setFeedIds] = useState<number[]>([]);
   const [feedIndex, setFeedIndex] = useState(0);
   const [contextLoading, setContextLoading] = useState(true);
@@ -26,38 +30,61 @@ export function useImageFeedSwipeViewer(feedId: number) {
 
   const ensureFeedData = useCallback(
     async (id: number) => {
+      if (!enabled) return;
       if (!id) return;
       if (cacheRef.current.has(id)) return;
       if (loadingRef.current.has(id)) return;
 
-      console.log('[ensureFeedData start]', id);
       loadingRef.current.add(id);
 
       try {
         const res = await fetchImageFeedViewer(id);
         cacheRef.current.set(id, res);
-        console.log('[ensureFeedData done]', id, 'images:', res.images?.length);
         bump();
       } catch (e: any) {
-        console.warn('[ensureFeedData fail]', id, e?.message);
       } finally {
         loadingRef.current.delete(id);
       }
     },
-    [bump],
+    [bump, enabled],
   );
 
   // ✅ context 로딩
   useEffect(() => {
+    if (!enabled) return;
     let mounted = true;
     (async () => {
       try {
         setContextLoading(true);
         setErr(null);
 
-        const ctx = await fetchImageFeedContext(feedId, 3000, 50);
-        console.log('[ImageFeedContext]', ctx);
+        if (options?.feedIds?.length) {
+          const ids = options.feedIds.filter(Boolean);
+          const fallbackIndex =
+            typeof options.initialIndex === 'number'
+              ? Math.max(0, Math.min(options.initialIndex, ids.length - 1))
+              : Math.max(0, ids.indexOf(feedId));
+          const idx = fallbackIndex >= 0 ? fallbackIndex : 0;
 
+          feedIdsRef.current = ids;
+          setFeedIds(ids);
+          setFeedIndex(idx);
+
+          const activeId = ids[idx];
+          const savedImgIdx = imageIndexByFeedId.current.get(activeId) ?? 0;
+          setActiveImageIndex(savedImgIdx);
+
+          ensureFeedData(activeId);
+          if (ids[idx + 1]) ensureFeedData(ids[idx + 1]);
+          if (ids[idx - 1]) ensureFeedData(ids[idx - 1]);
+
+          if (mounted) {
+            setContextLoading(false);
+          }
+          return;
+        }
+
+        const ctx = await fetchImageFeedContext(feedId, 3000, 50);
         if (!mounted) return;
 
         const ids = (ctx.feedIds?.length ? ctx.feedIds : [feedId]).filter(Boolean);
@@ -77,6 +104,17 @@ export function useImageFeedSwipeViewer(feedId: number) {
         if (ids[idx - 1]) ensureFeedData(ids[idx - 1]);
       } catch (e: any) {
         if (!mounted) return;
+        const status = e?.response?.status;
+        if (status === 404) {
+          const ids = [feedId].filter(Boolean);
+          feedIdsRef.current = ids;
+          setFeedIds(ids);
+          setFeedIndex(0);
+          const savedImgIdx = imageIndexByFeedId.current.get(feedId) ?? 0;
+          setActiveImageIndex(savedImgIdx);
+          ensureFeedData(feedId);
+          return;
+        }
         setErr(e?.message ?? '컨텍스트를 불러오지 못했습니다.');
       } finally {
         if (!mounted) return;
@@ -87,7 +125,7 @@ export function useImageFeedSwipeViewer(feedId: number) {
     return () => {
       mounted = false;
     };
-  }, [feedId, ensureFeedData]);
+  }, [enabled, feedId, ensureFeedData, options?.feedIds, options?.initialIndex]);
 
   const activeFeedId = feedIds[feedIndex];
   const activeData = useMemo(
@@ -113,8 +151,6 @@ export function useImageFeedSwipeViewer(feedId: number) {
       const ids = feedIdsRef.current;
       const id = ids[newIndex];
 
-      console.log('[Vertical] viewable index', newIndex, 'feedId', id);
-
       setFeedIndex(newIndex);
 
       if (id) {
@@ -131,6 +167,28 @@ export function useImageFeedSwipeViewer(feedId: number) {
     },
     [ensureFeedData],
   );
+
+  const removeFeedId = useCallback((id: number) => {
+    if (!id) return;
+    cacheRef.current.delete(id);
+    imageIndexByFeedId.current.delete(id);
+    loadingRef.current.delete(id);
+
+    setFeedIds((prev) => {
+      const next = prev.filter((fid) => fid !== id);
+      feedIdsRef.current = next;
+      const nextIndex = Math.min(feedIndex, Math.max(0, next.length - 1));
+      setFeedIndex(nextIndex);
+      const activeId = next[nextIndex];
+      if (activeId) {
+        const savedImgIdx = imageIndexByFeedId.current.get(activeId) ?? 0;
+        setActiveImageIndex(savedImgIdx);
+        ensureFeedData(activeId);
+      }
+      return next;
+    });
+    bump();
+  }, [bump, ensureFeedData, feedIndex]);
 
   return {
     // state
@@ -156,5 +214,6 @@ export function useImageFeedSwipeViewer(feedId: number) {
 
     // vertical callback
     onVerticalIndexChange,
+    removeFeedId,
   };
 }

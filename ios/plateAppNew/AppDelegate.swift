@@ -3,6 +3,8 @@ import React
 import React_RCTAppDelegate
 import ReactAppDependencyProvider
 import AVFoundation // ✅ 추가
+import GoogleMaps // ✅ Google Maps SDK
+import Firebase
 
 @main
 class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -15,6 +17,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
   ) -> Bool {
+    if FirebaseApp.app() == nil {
+      FirebaseApp.configure()
+    }
+
+    // ✅ Google Maps API Key 설정 (여기에 실제 키를 넣으세요)
+    GMSServices.provideAPIKey("AIzaSyCJo_cPEesR5gYe01uCP19DzxJEE3muzj8")
 
     // ✅ Audio Session: 앱 시작 시 1회 설정
     // - .ambient: iPhone 무음 스위치 obey (무음이면 영상 소리 안남)

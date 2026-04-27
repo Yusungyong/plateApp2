@@ -20,9 +20,18 @@ import {
   Pressable,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/Ionicons';
-import Config from 'react-native-config';
 import api from '../../../api/axiosInstance';
 import { useAuth } from '../../../auth/AuthProvider';
+import {
+  extractItemsFromPage,
+  isInt32,
+  seedAvatar,
+  timeAgo,
+  toMs,
+  withTimeout,
+} from '../../shared/commentUtils';
+import { buildProfileUri } from '../../../utils/profileImage';
+import { useProfileNavigation } from '../../../hooks/useProfileNavigation';
 
 type Props = {
   visible: boolean;
@@ -32,40 +41,6 @@ type Props = {
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 const CLOSE_THRESHOLD = 120;
-
-const PROFILE_BASE_URL = Config.PROFILE_BUCKET;
-
-const joinUrl = (base?: string, path?: string | null) => {
-  if (!base || !path) return undefined;
-  const trimmedBase = base.endsWith('/') ? base.slice(0, -1) : base;
-  const trimmedPath = path.startsWith('/') ? path.slice(1) : path;
-  return `${trimmedBase}/${trimmedPath}`;
-};
-
-const seedAvatar = (seed: string) =>
-  `https://api.dicebear.com/8.x/identicon/png?seed=${encodeURIComponent(seed)}&size=64`;
-
-const toMs = (v: any) => {
-  if (!v) return Date.now();
-  if (typeof v === 'number') return v > 1e12 ? v : v * 1000;
-  const t = Date.parse(String(v));
-  return Number.isFinite(t) ? t : Date.now();
-};
-
-const timeAgo = (ms: number) => {
-  const diff = Date.now() - ms;
-  const sec = Math.max(0, Math.floor(diff / 1000));
-  if (sec < 60) return `${sec}초`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}분`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}시간`;
-  const day = Math.floor(hr / 24);
-  return `${day}일`;
-};
-
-const isInt32 = (n: number) =>
-  Number.isInteger(n) && n >= -2147483648 && n <= 2147483647;
 
 // ===== API shapes (B안 기준) =====
 type ApiAuthor = {
@@ -123,29 +98,14 @@ type CommentItem = {
   replies: ReplyItem[]; // ✅ B안: 펼치기 전엔 빈 배열
   repliesLoaded: boolean;
   repliesLoading: boolean;
-};
-
-const extractItemsFromPage = (resData: any): any[] => {
-  if (!resData) return [];
-  if (Array.isArray(resData)) return resData;
-  if (Array.isArray(resData.content)) return resData.content;
-  if (Array.isArray(resData.items)) return resData.items;
-  if (Array.isArray(resData.comments)) return resData.comments;
-  if (Array.isArray(resData.replies)) return resData.replies;
-  return [];
-};
-
-const buildProfileUri = (username: string, fileOrUrl?: string) => {
-  const v = (fileOrUrl ?? '').toString().trim();
-  if (!v) return seedAvatar(username);
-  if (v.startsWith('http://') || v.startsWith('https://')) return v;
-  return joinUrl(PROFILE_BASE_URL, v) ?? seedAvatar(username);
+  pending?: boolean;
 };
 
 const normalizeReply = (r: ApiReply): ReplyItem => {
-  const username = (r?.author?.username ?? 'plate_user').toString();
-  const nick = (r?.author?.nickName ?? '').toString().trim();
-  const profile = buildProfileUri(username, r?.author?.profileImageUrl);
+  const author = (r as any)?.author ?? (r as any)?.user ?? {};
+  const username = (author?.username ?? (r as any)?.username ?? 'plate_user').toString();
+  const nick = (author?.nickName ?? author?.nick_name ?? '').toString().trim();
+  const profile = buildProfileUri(username, author?.profileImageUrl ?? author?.profile_image_url);
   const replyId = Number(r?.replyId ?? 0);
 
   return {
@@ -161,9 +121,10 @@ const normalizeReply = (r: ApiReply): ReplyItem => {
 };
 
 const normalizeComment = (c: ApiComment): CommentItem => {
-  const username = (c?.author?.username ?? 'plate_user').toString();
-  const nick = (c?.author?.nickName ?? '').toString().trim();
-  const profile = buildProfileUri(username, c?.author?.profileImageUrl);
+  const author = (c as any)?.author ?? (c as any)?.user ?? {};
+  const username = (author?.username ?? (c as any)?.username ?? 'plate_user').toString();
+  const nick = (author?.nickName ?? author?.nick_name ?? '').toString().trim();
+  const profile = buildProfileUri(username, author?.profileImageUrl ?? author?.profile_image_url);
 
   return {
     id: String(c.commentId),
@@ -175,16 +136,17 @@ const normalizeComment = (c: ApiComment): CommentItem => {
     authorNick: nick || undefined,
     authorProfileUri: profile,
 
-    replyCount: Number((c as any)?.replyCount ?? 0),
+    replyCount: Number((c as any)?.replyCount ?? (c as any)?.reply_count ?? 0),
     replies: [],
     repliesLoaded: false,
     repliesLoading: false,
+    pending: false,
   };
 };
 
 const VideoCommentModal: React.FC<Props> = ({ visible, onClose, storeId }) => {
   const { user } = useAuth();
-
+  const { navigateToProfile } = useProfileNavigation();
   const myUsername = useMemo(() => {
     const u: any = user;
     const v =
@@ -209,11 +171,11 @@ const VideoCommentModal: React.FC<Props> = ({ visible, onClose, storeId }) => {
   const [highlightReplyId, setHighlightReplyId] = useState<number | null>(null);
 
   const [text, setText] = useState('');
+  const textRef = useRef('');
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-
   const [page, setPage] = useState(0);
   const [hasNext, setHasNext] = useState(true);
   const [comments, setComments] = useState<CommentItem[]>([]);
@@ -357,13 +319,17 @@ const VideoCommentModal: React.FC<Props> = ({ visible, onClose, storeId }) => {
 
   // ✅ 댓글 목록 조회 (B안)
   const fetchComments = useCallback(
-    async (nextPage = 0, append = false) => {
+    async (
+      nextPage = 0,
+      append = false,
+      options?: { silent?: boolean },
+    ) => {
       if (!storeId && storeId !== 0) return;
-      if (!append) setLoading(true);
+      if (!append && !options?.silent) setLoading(true);
       setErrorMsg(null);
 
       try {
-        const res = await api.get(`/stores/${storeId}/comments`, {
+        const res = await api.get(`/api/stores/${storeId}/comments`, {
           params: { page: nextPage, size: 20 },
         });
 
@@ -374,11 +340,15 @@ const VideoCommentModal: React.FC<Props> = ({ visible, onClose, storeId }) => {
         setPage(nextPage);
         setHasNext(normalized.length >= 20);
       } catch (e: any) {
-        const msg = e?.response?.data?.message ?? e?.message ?? '댓글을 불러오지 못했어요.';
+        const msg =
+          e?.response?.data?.error?.message ??
+          e?.response?.data?.message ??
+          e?.message ??
+          '댓글을 불러오지 못했어요.';
         setErrorMsg(String(msg));
         if (!append) setComments([]);
       } finally {
-        if (!append) setLoading(false);
+        if (!append && !options?.silent) setLoading(false);
       }
     },
     [storeId],
@@ -405,7 +375,7 @@ const VideoCommentModal: React.FC<Props> = ({ visible, onClose, storeId }) => {
     );
 
     try {
-      const res = await api.get(`/comments/${commentId}/replies`, {
+      const res = await api.get(`/api/comments/${commentId}/replies`, {
         params: { page: 0, size: 50 },
       });
 
@@ -426,7 +396,7 @@ const VideoCommentModal: React.FC<Props> = ({ visible, onClose, storeId }) => {
             : c,
         ),
       );
-    } catch (e) {
+    } catch {
       setComments(prev =>
         prev.map(c =>
           c.commentId === commentId
@@ -439,7 +409,7 @@ const VideoCommentModal: React.FC<Props> = ({ visible, onClose, storeId }) => {
 
   const toggleExpanded = async (commentId: number) => {
     const key = String(commentId);
-    const willOpen = !Boolean(expanded[key]);
+    const willOpen = !expanded[key];
 
     setExpanded(prev => ({ ...prev, [key]: willOpen }));
 
@@ -456,16 +426,16 @@ const VideoCommentModal: React.FC<Props> = ({ visible, onClose, storeId }) => {
 
   // ===== CRUD =====
   const updateComment = async (commentId: number, content: string) => {
-    await api.put(`/comments/${commentId}`, { content });
+    await api.put(`/api/comments/${commentId}`, { content });
   };
   const deleteComment = async (commentId: number) => {
-    await api.delete(`/comments/${commentId}`);
+    await api.delete(`/api/comments/${commentId}`);
   };
   const updateReply = async (replyId: number, content: string) => {
-    await api.put(`/replies/${replyId}`, { content });
+    await api.put(`/api/replies/${replyId}`, { content });
   };
   const deleteReply = async (replyId: number) => {
-    await api.delete(`/replies/${replyId}`);
+    await api.delete(`/api/replies/${replyId}`);
   };
 
   const startEditComment = (item: CommentItem) => {
@@ -488,6 +458,11 @@ const VideoCommentModal: React.FC<Props> = ({ visible, onClose, storeId }) => {
   };
 
   const openCommentMenu = (item: CommentItem) => {
+    if (item.pending) return;
+    if (!myUsername || item.authorUsername !== myUsername) {
+      Alert.alert('권한 없음', '내가 작성한 댓글만 수정/삭제할 수 있어요.');
+      return;
+    }
     Alert.alert('댓글', '원하는 작업을 선택하세요', [
       { text: '수정', onPress: () => startEditComment(item) },
       {
@@ -516,6 +491,10 @@ const VideoCommentModal: React.FC<Props> = ({ visible, onClose, storeId }) => {
   };
 
   const openReplyMenu = (parentCommentId: number, r: ReplyItem) => {
+    if (!myUsername || r.authorUsername !== myUsername) {
+      Alert.alert('권한 없음', '내가 작성한 답글만 수정/삭제할 수 있어요.');
+      return;
+    }
     Alert.alert('답글', '원하는 작업을 선택하세요', [
       {
         text: '수정',
@@ -568,11 +547,16 @@ const VideoCommentModal: React.FC<Props> = ({ visible, onClose, storeId }) => {
   };
 
   // ✅ submit: 댓글/답글/수정 통합
-  const submit = async () => {
-    if (!canSubmit || submitting) return { ok: false as const };
+  const submit = async (contentOverride?: string) => {
+    const content = (contentOverride ?? text).trim();
+    const hasContent = content.length > 0;
 
-    const content = text.trim();
+    if (!hasContent || submitting) {
+      return { ok: false as const };
+    }
+
     setText('');
+    textRef.current = '';
     setSubmitting(true);
 
     try {
@@ -614,9 +598,10 @@ const VideoCommentModal: React.FC<Props> = ({ visible, onClose, storeId }) => {
 
       // --- 답글 모드 ---
       if (replyTarget) {
-        const res = await api.post(`/comments/${replyTarget.commentId}/replies`, { content });
-        const serverReplyId = Number(res?.data?.replyId);
-
+        const res = await api.post(`/api/comments/${replyTarget.commentId}/replies`, { content });
+        // 백엔드 스펙: { success: true, data: { replyId: 5678 } }
+        const responseData = res?.data?.data || res?.data;
+        const serverReplyId = Number(responseData?.replyId);
         // ✅ B안에선 답글 등록 후 해당 댓글의 replies를 다시 불러오는게 정석
         setExpanded(prev => ({ ...prev, [String(replyTarget.commentId)]: true }));
 
@@ -640,53 +625,98 @@ const VideoCommentModal: React.FC<Props> = ({ visible, onClose, storeId }) => {
       }
 
       // --- 댓글 등록 ---
-      const res = await api.post(`/stores/${storeId}/comments`, { content });
-      const serverCommentId = Number(res?.data?.commentId);
-
+      // 댓글 등록
+      const tempId = `temp-${Date.now()}`;
       const me = myUsername || 'me';
+      const optimistic: CommentItem = {
+        id: tempId,
+        commentId: 0,
+        storeId,
+        content,
+        createdAtMs: Date.now(),
+        authorUsername: me,
+        authorProfileUri: buildProfileUri(me, undefined),
+        replyCount: 0,
+        replies: [],
+        repliesLoaded: true,
+        repliesLoading: false,
+        pending: true,
+      };
+      setComments(prev => [optimistic, ...prev]);
+      scrollToTop(true);
+
+      const res = await withTimeout(
+        api.post(`/api/stores/${storeId}/comments`, { content }),
+        10000,
+      );
+      // 백엔드 스펙: { success: true, data: { commentId: 1234 } }
+      // res.data = { success: true, data: { commentId: 1234 } }
+      // res.data.data = { commentId: 1234 }
+      const responseData = res?.data?.data || res?.data;
+
+      const serverCommentId = Number(responseData?.commentId);
+
       if (Number.isFinite(serverCommentId) && isInt32(serverCommentId) && serverCommentId > 0) {
-        const optimistic: CommentItem = {
-          id: String(serverCommentId),
-          commentId: serverCommentId,
-          storeId,
-          content,
-          createdAtMs: Date.now(),
-          authorUsername: me,
-          authorProfileUri: buildProfileUri(me, undefined),
-          replyCount: 0,
-          replies: [],
-          repliesLoaded: true,
-          repliesLoading: false,
-        };
-        setComments(prev => [optimistic, ...prev]);
-        scrollToTop(true);
-        flashHighlightComment(serverCommentId);
+        setComments(prev =>
+          prev.map(c =>
+            c.id === tempId
+              ? {
+                  ...c,
+                  id: String(serverCommentId),
+                  commentId: serverCommentId,
+                  pending: false,
+                }
+              : c,
+          ),
+        );
+
+        // 서버에서 목록을 다시 가져온 후 하이라이트
+        await fetchComments(0, false, { silent: true });
+        requestAnimationFrame(() => {
+          flashHighlightComment(serverCommentId);
+        });
       } else {
-        scrollToTop(true);
+        setComments(prev => prev.filter(c => c.id !== tempId));
+        await fetchComments(0, false, { silent: true });
       }
 
-      await fetchComments(0, false);
       return { ok: true as const };
     } catch (e: any) {
       const msg = e?.response?.data?.message ?? e?.message ?? '요청에 실패했어요.';
       setErrorMsg(String(msg));
       setText(content);
+      textRef.current = content;
+      setComments(prev => prev.filter(c => !c.pending));
       return { ok: false as const };
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleSendTouchStart = () => {
-    if (!canSubmit || submitting) return;
+  const handleSendTouchStart = (contentOverride?: string) => {
+    const content = (contentOverride ?? textRef.current).trim();
+    if (!content || submitting) {
+      return;
+    }
+
     animateSendPress();
-    void (async () => {
-      const result = await submit();
-      if (result.ok) {
-        animateSendSuccess();
-        requestAnimationFrame(() => inputRef.current?.focus?.());
-      }
-    })();
+
+    submit(content)
+      .then((result) => {
+        if (result.ok) {
+          animateSendSuccess();
+        }
+      })
+      .catch(() => {});
+  };
+
+  const handleSendPress = () => {
+    if (submitting) return;
+    setTimeout(() => {
+      const content = (textRef.current || text).trim();
+      if (!content || submitting) return;
+      handleSendTouchStart(content);
+    }, 0);
   };
 
   useEffect(() => {
@@ -727,13 +757,20 @@ const VideoCommentModal: React.FC<Props> = ({ visible, onClose, storeId }) => {
           },
         ]}
       >
-        <Image
-          source={{ uri: r.authorProfileUri || seedAvatar(r.authorUsername) }}
-          style={styles.replyAvatar}
-        />
+        <TouchableOpacity
+          onPress={() => navigateToProfile(r.authorUsername)}
+          activeOpacity={0.8}
+        >
+          <Image
+            source={{ uri: r.authorProfileUri || seedAvatar(r.authorUsername) }}
+            style={styles.replyAvatar}
+          />
+        </TouchableOpacity>
         <View style={styles.replyBody}>
           <View style={styles.replyHeaderLine}>
-            <Text style={styles.replyUsername}>@{r.authorUsername}</Text>
+            <TouchableOpacity onPress={() => navigateToProfile(r.authorUsername)}>
+              <Text style={styles.replyUsername}>@{r.authorUsername}</Text>
+            </TouchableOpacity>
             <Text style={styles.replyTime}> · {timeAgo(r.createdAtMs)}</Text>
 
             {isMine ? (
@@ -769,14 +806,24 @@ const VideoCommentModal: React.FC<Props> = ({ visible, onClose, storeId }) => {
         ]}
       >
         <View style={styles.commentRow}>
-          <Image
-            source={{ uri: item.authorProfileUri || seedAvatar(item.authorUsername) }}
-            style={styles.commentAvatar}
-          />
+          <TouchableOpacity
+            onPress={() => navigateToProfile(item.authorUsername)}
+            activeOpacity={0.8}
+          >
+            <Image
+              source={{ uri: item.authorProfileUri || seedAvatar(item.authorUsername) }}
+              style={styles.commentAvatar}
+            />
+          </TouchableOpacity>
           <View style={styles.commentBody}>
             <View style={styles.commentHeaderLine}>
-              <Text style={styles.commentUsername}>@{item.authorUsername}</Text>
+              <TouchableOpacity onPress={() => navigateToProfile(item.authorUsername)}>
+                <Text style={styles.commentUsername}>@{item.authorUsername}</Text>
+              </TouchableOpacity>
               <Text style={styles.commentTime}> · {timeAgo(item.createdAtMs)}</Text>
+              {item.pending ? (
+                <Text style={styles.commentPending}> · 등록 중</Text>
+              ) : null}
 
               {isMine ? (
                 <TouchableOpacity
@@ -904,7 +951,9 @@ const VideoCommentModal: React.FC<Props> = ({ visible, onClose, storeId }) => {
               </View>
             ) : (
               <FlatList
-                ref={r => (listRef.current = r)}
+                ref={r => {
+                  listRef.current = r;
+                }}
                 data={comments}
                 keyExtractor={c => c.id}
                 renderItem={renderItem}
@@ -914,7 +963,7 @@ const VideoCommentModal: React.FC<Props> = ({ visible, onClose, storeId }) => {
                 refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}
                 contentContainerStyle={[
                   styles.listContent,
-                  comments.length === 0 && { flexGrow: 1 },
+                  comments.length === 0 && styles.listContentEmpty,
                 ]}
                 ListEmptyComponent={
                   <View style={styles.empty}>
@@ -927,7 +976,12 @@ const VideoCommentModal: React.FC<Props> = ({ visible, onClose, storeId }) => {
             )}
 
             {/* 입력 영역 */}
-            <View style={styles.inputDock}>
+            <View
+              style={[
+                styles.inputDock,
+                styles.inputDockPadded,
+              ]}
+            >
               {modeLabel ? (
                 <View style={styles.modeBar}>
                   <Text style={styles.modeText}>{modeLabel}</Text>
@@ -943,9 +997,14 @@ const VideoCommentModal: React.FC<Props> = ({ visible, onClose, storeId }) => {
 
               <View style={styles.inputCard}>
                 <TextInput
-                  ref={r => (inputRef.current = r)}
+                  ref={r => {
+                    inputRef.current = r;
+                  }}
                   value={text}
-                  onChangeText={setText}
+                  onChangeText={value => {
+                    textRef.current = value;
+                    setText(value);
+                  }}
                   placeholder={placeholder}
                   placeholderTextColor="#9aa0a6"
                   style={styles.input}
@@ -954,19 +1013,22 @@ const VideoCommentModal: React.FC<Props> = ({ visible, onClose, storeId }) => {
                   submitBehavior="submit"
                   returnKeyType="send"
                   onSubmitEditing={() => {
-                    if (!canSubmit || submitting) return;
+                    const content = textRef.current.trim();
+                    if (!content || submitting) return;
                     animateSendPress();
-                    void (async () => {
-                      const result = await submit();
-                      if (result.ok) animateSendSuccess();
-                      requestAnimationFrame(() => inputRef.current?.focus?.());
-                    })();
+                    submit(content)
+                      .then((result) => {
+                        if (result.ok) animateSendSuccess();
+                      })
+                      .catch(() => {});
                   }}
                 />
 
                 <Pressable
-                  onTouchStart={handleSendTouchStart}
-                  disabled={!canSubmit || submitting}
+                  onTouchStart={() => {
+                    handleSendPress();
+                  }}
+                  onPress={handleSendPress}
                   style={({ pressed }) => [
                     styles.sendBtn,
                     (!canSubmit || submitting) && styles.sendBtnDisabled,
@@ -1034,6 +1096,7 @@ const styles = StyleSheet.create({
   loadingText: { color: '#9aa0a6', fontSize: 13, fontWeight: '700' },
 
   listContent: { paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6 },
+  listContentEmpty: { flexGrow: 1 },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   emptyText: {
     color: '#9aa0a6',
@@ -1061,6 +1124,7 @@ const styles = StyleSheet.create({
   commentHeaderLine: { flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap' },
   commentUsername: { color: '#111827', fontSize: 13, fontWeight: '800' },
   commentTime: { color: '#9aa0a6', fontSize: 12, fontWeight: '700' },
+  commentPending: { color: '#9aa0a6', fontSize: 12, fontWeight: '700' },
   moreBtn: { marginLeft: 'auto', paddingHorizontal: 6, paddingVertical: 4 },
   commentText: {
     marginTop: 4,
@@ -1133,6 +1197,7 @@ const styles = StyleSheet.create({
   replyText: { marginTop: 3, color: '#111827', fontSize: 13, fontWeight: '600', lineHeight: 18 },
 
   inputDock: { paddingHorizontal: 12, paddingTop: 8, paddingBottom: 14, backgroundColor: '#fff' },
+  inputDockPadded: { paddingBottom: 12 },
   modeBar: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -1,6 +1,5 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
-  SafeAreaView,
   View,
   StyleSheet,
   KeyboardAvoidingView,
@@ -9,7 +8,8 @@ import {
   TextInput,
   Animated,
 } from 'react-native';
-import { colors, spacing } from '../../styles/theme';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useTheme } from '../../styles/theme';
 
 import SignupHeader from './components/SignupHeader';
 import SignupStepTerms from './components/SignupStepTerms';
@@ -40,6 +40,11 @@ const SignupScreen: React.FC<SignupScreenProps> = ({
   onOpenTerms,
   onOpenPrivacy,
 }) => {
+  const { colors, spacing } = useTheme();
+  const styles = useMemo(
+    () => createStyles({ colors, spacing }),
+    [colors, spacing],
+  );
   // 1) 상태값들
   const [step, setStep] = useState<Step>(0);
 
@@ -247,33 +252,40 @@ const SignupScreen: React.FC<SignupScreenProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  flex: {
-    flex: 1,
-  },
-  scrollContent: {
-    flexGrow: 1,
-    paddingHorizontal: spacing.xl,
-    paddingTop: spacing.xxl,
-    paddingBottom: spacing.xxxl,
-  },
-  card: {
-    borderRadius: 24,
-    backgroundColor: '#FFFFFF',
-    padding: spacing.lg,
-    paddingBottom: spacing.xl,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(0,0,0,0.04)',
-    shadowColor: '#000000',
-    shadowOpacity: 0.03,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 1,
-  },
-});
+const createStyles = ({
+  colors,
+  spacing,
+}: {
+  colors: ReturnType<typeof useTheme>['colors'];
+  spacing: ReturnType<typeof useTheme>['spacing'];
+}) =>
+  StyleSheet.create({
+    safeArea: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    flex: {
+      flex: 1,
+    },
+    scrollContent: {
+      flexGrow: 1,
+      paddingHorizontal: spacing.xl,
+      paddingTop: spacing.xxl,
+      paddingBottom: spacing.xxxl,
+    },
+    card: {
+      borderRadius: 24,
+      backgroundColor: colors.background,
+      padding: spacing.lg,
+      paddingBottom: spacing.xl,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.borderDefault,
+      shadowColor: colors.textPrimary,
+      shadowOpacity: 0.03,
+      shadowRadius: 8,
+      shadowOffset: { width: 0, height: 3 },
+      elevation: 1,
+    },
+  });
 
 export default SignupScreen;

@@ -1,9 +1,18 @@
 // src/auth/AuthProvider.tsx
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import api from '../api/axiosInstance';
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
+import { AxiosError } from 'axios';
+import api, { setAuthFailureHandler } from '../api/axiosInstance';
 import { saveTokens, getTokens, clearTokens } from './tokenStorage';
 import { getDeviceInfo } from './deviceInfo';
-import type { AxiosError } from 'axios';
+import { initFcmMessaging } from '../notifications/fcm';
+import { createLogger } from '../utils/logger';
+ 
 
 type ApiResponse<T> = {
   success: boolean;
@@ -24,7 +33,7 @@ interface AuthContextProps {
   loading: boolean;
   login: (id: string, pw: string) => Promise<boolean>;
   logout: () => Promise<void>;
-  socialLogin: (provider: string, data: any) => Promise<boolean>;
+  socialLogin: (provider: string, data: any) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextProps | null>(null);
@@ -48,10 +57,26 @@ const unwrapOrThrow = <T,>(resData: any): T => {
   return resData as T;
 };
 
-const logAxios = (tag: string, e: unknown) => {
-  const err = e as AxiosError<any>;
-  console.warn(`${tag} status:`, err.response?.status);
-  console.warn(`${tag} data:`, err.response?.data);
+const authLogger = createLogger('[auth]');
+
+const getReadableErrorMessage = (error: unknown, fallback: string) => {
+  const axiosError = error as AxiosError<any>;
+  const responseBody: any = axiosError?.response?.data;
+  const message =
+    responseBody?.message ??
+    responseBody?.error ??
+    responseBody?.data?.message ??
+    (error as Error | undefined)?.message;
+  return typeof message === 'string' && message.trim().length > 0 ? message : fallback;
+};
+
+const logAxios = (tag: string, error: unknown) => {
+  const axiosError = error as AxiosError<any>;
+  authLogger.warn(tag, {
+    message: axiosError?.message ?? (error as Error | undefined)?.message ?? null,
+    status: axiosError?.response?.status ?? null,
+    data: axiosError?.response?.data ?? null,
+  });
 };
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
@@ -64,10 +89,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       const tokens = await getTokens();
       if (tokens?.accessToken) {
         try {
-          const res = await api.get('/me');
+          const res = await api.get('/api/me');
           const me = unwrapOrThrow<any>(res.data);
           setUser(me);
-        } catch (e) {
+        } catch {
           // accessToken이 깨졌거나 만료된 경우
           await clearTokens();
           setUser(null);
@@ -77,17 +102,32 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     })();
   }, []);
 
-  const socialLogin = async (provider: string, data: any) => {
-    try {
-      const device = await getDeviceInfo();
+  useEffect(() => {
+    if (!user?.username) return;
+    const cleanup = initFcmMessaging({ username: user.username });
+    return cleanup;
+  }, [user?.username]);
 
+  useEffect(() => {
+    setAuthFailureHandler(async () => {
+      await clearTokens();
+      setUser(null);
+    });
+    return () => {
+      setAuthFailureHandler(null);
+    };
+  }, []);
+
+  const socialLogin = async (provider: string, data: any) => {
+    const device = await getDeviceInfo();
+    try {
       // ✅ provider별 endpoint 우선 사용 (DTO/스펙 불일치 방지)
       const endpoint =
         provider === 'kakao'
-          ? '/auth/social/kakao'
+          ? '/api/auth/social/kakao'
           : provider === 'google'
-            ? '/auth/social/google'
-            : `/auth/social/${provider}`; // apple 등
+            ? '/api/auth/social/google'
+            : `/api/auth/social/${provider}`; // apple 등
 
       const res = await api.post(endpoint, {
         ...data,
@@ -96,28 +136,24 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
       const tokens = unwrapOrThrow<Tokens>(res.data);
       if (!tokens?.accessToken || !tokens?.refreshToken) {
-        console.warn('[socialLogin] token payload missing', res.data);
-        return false;
+        throw new Error('로그인 토큰을 받지 못했어요.');
       }
 
       await saveTokens(tokens.accessToken, tokens.refreshToken);
 
-      const meRes = await api.get('/me');
+      const meRes = await api.get('/api/me');
       const me = unwrapOrThrow<any>(meRes.data);
       setUser(me);
-
-      return true;
     } catch (e) {
       logAxios('[socialLogin]', e);
-      return false;
+      throw new Error(getReadableErrorMessage(e, '소셜 로그인을 완료하지 못했어요.'));
     }
   };
 
   const login = async (username: string, password: string) => {
+    const device = await getDeviceInfo();
     try {
-      const device = await getDeviceInfo();
-
-      const res = await api.post('/auth/login', {
+      const res = await api.post('/api/auth/login', {
         username,
         password,
         ...device,
@@ -125,16 +161,14 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
       const tokens = unwrapOrThrow<Tokens>(res.data);
       if (!tokens?.accessToken || !tokens?.refreshToken) {
-        console.warn('[login] token payload missing', res.data);
         return false;
       }
 
       await saveTokens(tokens.accessToken, tokens.refreshToken);
 
-      const meRes = await api.get('/me');
+      const meRes = await api.get('/api/me');
       const me = unwrapOrThrow<any>(meRes.data);
       setUser(me);
-
       return true;
     } catch (e) {
       logAxios('[login]', e);
@@ -145,7 +179,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const logout = async () => {
     // 서버에 logout API가 없거나 필요 없으면 호출 실패해도 무시
     try {
-      await api.post('/auth/logout');
+      await api.post('/api/auth/logout');
     } catch {}
 
     await clearTokens();
@@ -160,4 +194,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
 
-export const useAuth = () => useContext(AuthContext);
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error('useAuth must be used within AuthProvider');
+  }
+  return context;
+};

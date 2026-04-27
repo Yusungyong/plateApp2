@@ -4,7 +4,7 @@ import { Alert } from 'react-native';
 import LoginScreen from './LoginScreen';
 import { useAuth } from '../../auth/AuthProvider';
 
-const LoginScreenContainer = ({ navigation }: any) => {
+const LoginScreenContainer = ({ navigation }: { navigation: any }) => {
   const { login } = useAuth();
 
   const handleLogin = async (id: string, pw: string) => {
@@ -18,6 +18,7 @@ const LoginScreenContainer = ({ navigation }: any) => {
   return (
     <LoginScreen
       onLogin={handleLogin}
+      onContinueAsGuest={() => navigation.navigate('Home')}
       onSignupPress={() => {
         navigation.navigate('Signup');
       }}
@@ -25,9 +26,7 @@ const LoginScreenContainer = ({ navigation }: any) => {
         // 🔹 비밀번호 찾기 > 이메일 검증 페이지로 이동
         navigation.navigate('ForgotPasswordEmail');
       }}
-      onSocialLoginPress={provider => {
-        console.log('social login:', provider);
-      }}
+      onSocialLoginPress={(_provider: 'apple' | 'kakao' | 'google') => {}}
     />
   );
 };

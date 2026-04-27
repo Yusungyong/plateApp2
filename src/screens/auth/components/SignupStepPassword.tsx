@@ -8,8 +8,8 @@ type Props = {
   passwordConfirm: string;
   onChangePassword: (text: string) => void;
   onChangePasswordConfirm: (text: string) => void;
-  pwInputRef: React.RefObject<TextInput>;
-  pwConfirmInputRef: React.RefObject<TextInput>;
+  pwInputRef: React.RefObject<TextInput | null>;
+  pwConfirmInputRef: React.RefObject<TextInput | null>;
   onValidityChange?: (valid: boolean) => void; // ✅ 비밀번호 전체 유효 여부
 };
 

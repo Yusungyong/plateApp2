@@ -1,14 +1,13 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
   StyleSheet,
 } from 'react-native';
-import { colors, spacing, typography } from '../../../styles/theme';
+import { useTheme } from '../../../styles/theme';
 
 const HIT_SLOP = { top: 8, bottom: 8, left: 8, right: 8 };
-const BRAND_COLOR = '#FF7F50';
 
 type Props = {
   agreeService: boolean;
@@ -31,6 +30,11 @@ const SignupStepTerms: React.FC<Props> = ({
   onOpenPrivacy,
   onValidityChange,
 }) => {
+  const { colors, spacing, typography } = useTheme();
+  const styles = useMemo(
+    () => createStyles({ colors, spacing, typography }),
+    [colors, spacing, typography],
+  );
   const isRequiredAgreed = agreeService && agreePrivacy;
   const showError =
     !isRequiredAgreed && (agreeService || agreePrivacy); // 한쪽이라도 체크했다가 풀리면 안내
@@ -128,60 +132,69 @@ const SignupStepTerms: React.FC<Props> = ({
   );
 };
 
-const styles = StyleSheet.create({
-  stepContainer: {
-    marginTop: spacing.sm,
-  },
-  agreementBox: {
-    gap: spacing.md,
-  },
-  agreeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  checkbox: {
-    width: 22,
-    height: 22,
-    borderRadius: 7,
-    borderWidth: 1.5,
-    borderColor: 'rgba(0,0,0,0.08)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: spacing.sm,
-    backgroundColor: '#FFFFFF',
-  },
-  checkboxChecked: {
-    borderColor: BRAND_COLOR,
-    backgroundColor: BRAND_COLOR,
-  },
-  checkboxMark: {
-    fontSize: 13,
-    color: '#FFFFFF',
-  },
-  agreeAllText: {
-    ...typography.bodySmall,
-    fontWeight: '600',
-    color: colors.textPrimary,
-  },
-  agreeItems: {
-    marginTop: spacing.sm,
-    gap: spacing.sm,
-  },
-  agreeText: {
-    ...typography.bodySmall,
-    color: colors.textPrimary,
-    marginRight: spacing.sm,
-  },
-  linkSmall: {
-    fontSize: 12,
-    color: BRAND_COLOR,
-    textDecorationLine: 'underline',
-  },
-  errorText: {
-    marginTop: spacing.xs,
-    fontSize: 12,
-    color: '#E64545',
-  },
-});
+const createStyles = ({
+  colors,
+  spacing,
+  typography,
+}: {
+  colors: ReturnType<typeof useTheme>['colors'];
+  spacing: ReturnType<typeof useTheme>['spacing'];
+  typography: ReturnType<typeof useTheme>['typography'];
+}) =>
+  StyleSheet.create({
+    stepContainer: {
+      marginTop: spacing.sm,
+    },
+    agreementBox: {
+      gap: spacing.md,
+    },
+    agreeRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    checkbox: {
+      width: 22,
+      height: 22,
+      borderRadius: 7,
+      borderWidth: 1.5,
+      borderColor: colors.borderDefault,
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginRight: spacing.sm,
+      backgroundColor: colors.background,
+    },
+    checkboxChecked: {
+      borderColor: colors.brandPrimary,
+      backgroundColor: colors.brandPrimary,
+    },
+    checkboxMark: {
+      fontSize: 13,
+      color: '#FFFFFF',
+    },
+    agreeAllText: {
+      ...typography.bodySmall,
+      fontWeight: '600',
+      color: colors.textPrimary,
+    },
+    agreeItems: {
+      marginTop: spacing.sm,
+      gap: spacing.sm,
+    },
+    agreeText: {
+      ...typography.bodySmall,
+      color: colors.textPrimary,
+      marginRight: spacing.sm,
+    },
+    linkSmall: {
+      fontSize: 12,
+      color: colors.brandPrimary,
+      textDecorationLine: 'underline',
+    },
+    errorText: {
+      marginTop: spacing.xs,
+      fontSize: 12,
+      color: '#E64545',
+    },
+  });
 
 export default SignupStepTerms;

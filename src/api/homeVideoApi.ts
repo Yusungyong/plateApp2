@@ -1,6 +1,10 @@
 // src/api/homeVideoApi.ts
 import api from './axiosInstance';
 import { getOrCreateGuestId } from '../auth/guestIdStorage';
+import { getGuestParams } from './guestParams';
+
+type HomeSortType = 'RECENT' | 'NEARBY';
+type HomeLocation = { latitude: number; longitude: number };
 
 export type HomeVideoThumbnail = {
   storeId: number;
@@ -13,6 +17,7 @@ export type HomeVideoThumbnail = {
   storeName: string | null;
   address: string | null;
   placeId: string | null;
+  createdAt?: string | null;
   updatedAt: string;     // ISO 문자열
 };
 
@@ -32,6 +37,7 @@ export async function fetchHomeVideoThumbnails(
   page = 0,
   size = 10,
   user?: { username?: string | null } | null,
+  options?: { sortType?: HomeSortType; location?: HomeLocation | null; radius?: number },
 ): Promise<PageResponse<HomeVideoThumbnail>> {
   let params: Record<string, any> = { page, size };
 
@@ -41,9 +47,23 @@ export async function fetchHomeVideoThumbnails(
     params.isGuest = false;
   } else {
     // 게스트 사용자
-    const guestId = await getOrCreateGuestId();
-    params.isGuest = true;
-    params.guestId = guestId;
+    const guestParams = await getGuestParams();
+    params = { ...params, ...guestParams };
+    if (!params.guestId) {
+      params.guestId = await getOrCreateGuestId();
+      params.isGuest = true;
+    }
+  }
+
+  if (options?.sortType) {
+    params.sortType = options.sortType;
+  }
+  if (options?.sortType === 'NEARBY' && options.location) {
+    params.lat = options.location.latitude;
+    params.lng = options.location.longitude;
+    if (options.radius) {
+      params.radius = options.radius;
+    }
   }
 
   const res = await api.get<PageResponse<HomeVideoThumbnail>>(
@@ -68,9 +88,12 @@ export async function createHomeVideoWatchHistory(
     payload.username = user.username;
     payload.isGuest = false;
   } else {
-    const guestId = await getOrCreateGuestId();
-    payload.isGuest = true;
-    payload.guestId = guestId;
+    const guestParams = await getGuestParams();
+    payload = { ...payload, ...guestParams };
+    if (!payload.guestId) {
+      payload.guestId = await getOrCreateGuestId();
+      payload.isGuest = true;
+    }
   }
 
   await api.post('/api/home/video-watch-history', payload);

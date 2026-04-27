@@ -20,9 +20,18 @@ import {
   Pressable,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/Ionicons';
-import Config from 'react-native-config';
 import api from '../../../api/axiosInstance';
 import { useAuth } from '../../../auth/AuthProvider';
+import {
+  extractItemsFromPage,
+  isInt32,
+  seedAvatar,
+  timeAgo,
+  toMs,
+  withTimeout,
+} from '../../shared/commentUtils';
+import { buildProfileUri } from '../../../utils/profileImage';
+import { useProfileNavigation } from '../../../hooks/useProfileNavigation';
 
 
 type Props = {
@@ -36,40 +45,6 @@ type Props = {
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 const CLOSE_THRESHOLD = 120;
-
-const PROFILE_BASE_URL = Config.PROFILE_BUCKET;
-
-const joinUrl = (base?: string, path?: string | null) => {
-  if (!base || !path) return undefined;
-  const trimmedBase = base.endsWith('/') ? base.slice(0, -1) : base;
-  const trimmedPath = path.startsWith('/') ? path.slice(1) : path;
-  return `${trimmedBase}/${trimmedPath}`;
-};
-
-const seedAvatar = (seed: string) =>
-  `https://api.dicebear.com/8.x/identicon/png?seed=${encodeURIComponent(seed)}&size=64`;
-
-const toMs = (v: any) => {
-  if (!v) return Date.now();
-  if (typeof v === 'number') return v > 1e12 ? v : v * 1000;
-  const t = Date.parse(String(v));
-  return Number.isFinite(t) ? t : Date.now();
-};
-
-const timeAgo = (ms: number) => {
-  const diff = Date.now() - ms;
-  const sec = Math.max(0, Math.floor(diff / 1000));
-  if (sec < 60) return `${sec}초`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}분`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}시간`;
-  const day = Math.floor(hr / 24);
-  return `${day}일`;
-};
-
-const isInt32 = (n: number) =>
-  Number.isInteger(n) && n >= -2147483648 && n <= 2147483647;
 
 // ===== API shapes (서버 DTO 기준) =====
 type ApiAuthor = {
@@ -125,21 +100,11 @@ type CommentItem = {
   replies: ReplyItem[]; // 펼치기 전엔 빈 배열
   repliesLoaded: boolean;
   repliesLoading: boolean;
-};
-
-// page/array 어느 형태든 안전하게 아이템 추출
-const extractItemsFromPage = (resData: any): any[] => {
-  if (!resData) return [];
-  if (Array.isArray(resData)) return resData;
-  if (Array.isArray(resData.content)) return resData.content;
-  if (Array.isArray(resData.items)) return resData.items;
-  if (Array.isArray(resData.comments)) return resData.comments;
-  if (Array.isArray(resData.replies)) return resData.replies;
-  return [];
+  pending?: boolean;
 };
 
 const extractPageMeta = (resData: any) => {
-  const page = Number(resData?.page ?? 0);
+const page = Number(resData?.page ?? resData?.number ?? 0);
   const size = Number(resData?.size ?? 20);
   const total = Number(resData?.totalElements ?? 0);
   return {
@@ -147,13 +112,6 @@ const extractPageMeta = (resData: any) => {
     size: Number.isFinite(size) ? size : 20,
     totalElements: Number.isFinite(total) ? total : 0,
   };
-};
-
-const buildProfileUri = (username: string, fileOrUrl?: string) => {
-  const v = (fileOrUrl ?? '').toString().trim();
-  if (!v) return seedAvatar(username);
-  if (v.startsWith('http://') || v.startsWith('https://')) return v;
-  return joinUrl(PROFILE_BASE_URL, v) ?? seedAvatar(username);
 };
 
 const normalizeReply = (r: ApiReply): ReplyItem => {
@@ -193,11 +151,13 @@ const normalizeComment = (c: ApiComment): CommentItem => {
     replies: [],
     repliesLoaded: false,
     repliesLoading: false,
+    pending: false,
   };
 };
 
 const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onCommentCountChange }) => {
   const { user } = useAuth();
+  const { navigateToProfile } = useProfileNavigation();
 
   const myUsername = useMemo(() => {
     const u: any = user;
@@ -223,15 +183,19 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
   const [highlightReplyId, setHighlightReplyId] = useState<number | null>(null);
 
   const [text, setText] = useState('');
+  const textRef = useRef('');
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const [page, setPage] = useState(0);
+  const [, setPage] = useState(0);
   const [size, setSize] = useState(20);
   const [hasNext, setHasNext] = useState(true);
   const [comments, setComments] = useState<CommentItem[]>([]);
+  const pageRef = useRef(0);
+  const lastLoadMorePageRef = useRef<number | null>(null);
 
   const [replyTarget, setReplyTarget] = useState<{ commentId: number; username: string } | null>(
     null,
@@ -259,6 +223,8 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
       duration: 200,
       useNativeDriver: true,
     }).start(() => {
+      pageRef.current = 0;
+      lastLoadMorePageRef.current = null;
       setText('');
       setReplyTarget(null);
       setEditTarget(null);
@@ -373,36 +339,52 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
 
   // ✅ 댓글 목록 조회 (B안)
   const fetchComments = useCallback(
-    async (nextPage = 0, append = false) => {
+    async (nextPage = 0, append = false, options?: { silent?: boolean }) => {
       if (!feedId && feedId !== 0) return;
-      if (!append) setLoading(true);
+      if (!append) {
+        lastLoadMorePageRef.current = null;
+      }
+      if (append) {
+        setLoadingMore(true);
+      } else if (!options?.silent) {
+        setLoading(true);
+      }
       setErrorMsg(null);
 
       try {
-        const res = await api.get(`/image-feeds/${feedId}/comments`, {
+        const res = await api.get(`/api/image-feeds/${feedId}/comments`, {
           params: { page: nextPage, size: 20 },
         });
 
-        const meta = extractPageMeta(res.data);
-        const raw = extractItemsFromPage(res.data) as ApiComment[];
+        const payload = res.data?.data ?? res.data;
+        const meta = extractPageMeta(payload);
+        const raw = extractItemsFromPage(payload) as ApiComment[];
         const normalized = raw.map(normalizeComment);
 
+        const resolvedSize = meta.size ?? 20;
+        const resolvedPage =
+          append ? nextPage : Number.isFinite(meta.page) ? meta.page : nextPage;
         setComments(prev => (append ? [...prev, ...normalized] : normalized));
-        setPage(meta.page ?? nextPage);
-        setSize(meta.size ?? 20);
+        setPage(resolvedPage);
+        pageRef.current = resolvedPage;
+        setSize(resolvedSize);
 
         // totalElements 기반 hasNext 계산 (없으면 length 기반 fallback)
         if (meta.totalElements > 0) {
-          setHasNext((meta.page + 1) * meta.size < meta.totalElements);
+          setHasNext((resolvedPage + 1) * resolvedSize < meta.totalElements);
         } else {
-          setHasNext(normalized.length >= (meta.size ?? 20));
+          setHasNext(normalized.length >= resolvedSize);
         }
       } catch (e: any) {
         const msg = e?.response?.data?.message ?? e?.message ?? '댓글을 불러오지 못했어요.';
         setErrorMsg(String(msg));
         if (!append) setComments([]);
       } finally {
-        if (!append) setLoading(false);
+        if (append) {
+          setLoadingMore(false);
+        } else if (!options?.silent) {
+          setLoading(false);
+        }
       }
     },
     [feedId],
@@ -415,10 +397,15 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
   };
 
   const loadMore = async () => {
-    if (loading || refreshing) return;
+    if (loading || loadingMore || refreshing) return;
     if (!hasNext) return;
-    await fetchComments(page + 1, true);
+    const nextPage = pageRef.current + 1;
+    if (lastLoadMorePageRef.current === nextPage) return;
+    lastLoadMorePageRef.current = nextPage;
+    await fetchComments(nextPage, true);
   };
+
+  const canLoadMore = hasNext && comments.length >= size;
 
   // ✅ 답글은 펼칠 때만 조회
   const fetchReplies = useCallback(async (commentId: number) => {
@@ -429,11 +416,12 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
     );
 
     try {
-      const res = await api.get(`/image-feeds/comments/${commentId}/replies`, {
+      const res = await api.get(`/api/image-feeds/comments/${commentId}/replies`, {
         params: { page: 0, size: 50 },
       });
 
-      const raw = extractItemsFromPage(res.data) as ApiReply[];
+      const payload = res.data?.data ?? res.data;
+      const raw = extractItemsFromPage(payload) as ApiReply[];
       const normalizedReplies = raw.map(normalizeReply);
 
       setComments(prev =>
@@ -449,7 +437,7 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
             : c,
         ),
       );
-    } catch (e) {
+    } catch {
       setComments(prev =>
         prev.map(c =>
           c.commentId === commentId
@@ -462,7 +450,7 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
 
   const toggleExpanded = async (commentId: number) => {
     const key = String(commentId);
-    const willOpen = !Boolean(expanded[key]);
+    const willOpen = !expanded[key];
 
     setExpanded(prev => ({ ...prev, [key]: willOpen }));
 
@@ -478,16 +466,16 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
 
   // ===== CRUD =====
   const updateComment = async (commentId: number, content: string) => {
-    await api.put(`/image-feeds/comments/${commentId}`, { content });
+    await api.put(`/api/image-feeds/comments/${commentId}`, { content });
   };
   const deleteComment = async (commentId: number) => {
-    await api.delete(`/image-feeds/comments/${commentId}`);
+    await api.delete(`/api/image-feeds/comments/${commentId}`);
   };
   const updateReply = async (replyId: number, content: string) => {
-    await api.put(`/image-feeds/replies/${replyId}`, { content });
+    await api.put(`/api/image-feeds/replies/${replyId}`, { content });
   };
   const deleteReply = async (replyId: number) => {
-    await api.delete(`/image-feeds/replies/${replyId}`);
+    await api.delete(`/api/image-feeds/replies/${replyId}`);
   };
 
   const startEditComment = (item: CommentItem) => {
@@ -510,6 +498,11 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
   };
 
   const openCommentMenu = (item: CommentItem) => {
+    if (item.pending) return;
+    if (!myUsername || item.authorUsername !== myUsername) {
+      Alert.alert('권한 없음', '내가 작성한 댓글만 수정/삭제할 수 있어요.');
+      return;
+    }
     Alert.alert('댓글', '원하는 작업을 선택하세요', [
       { text: '수정', onPress: () => startEditComment(item) },
       {
@@ -539,6 +532,10 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
   };
 
   const openReplyMenu = (parentCommentId: number, r: ReplyItem) => {
+    if (!myUsername || r.authorUsername !== myUsername) {
+      Alert.alert('권한 없음', '내가 작성한 답글만 수정/삭제할 수 있어요.');
+      return;
+    }
     Alert.alert('답글', '원하는 작업을 선택하세요', [
       {
         text: '수정',
@@ -590,12 +587,14 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
   };
 
   // ✅ submit: 댓글/답글/수정 통합
-  const submit = async () => {
-    if (!canSubmit || submitting) return { ok: false as const };
+  const submit = async (contentOverride?: string) => {
+    const content = (contentOverride ?? text).trim();
+    const hasContent = content.length > 0;
+    if (!hasContent || submitting) return { ok: false as const };
     if (!feedId && feedId !== 0) return { ok: false as const };
 
-    const content = text.trim();
     setText('');
+    textRef.current = '';
     setSubmitting(true);
 
     try {
@@ -637,7 +636,7 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
 
       // --- 답글 모드 ---
       if (replyTarget) {
-        const res = await api.post(`/image-feeds/comments/${replyTarget.commentId}/replies`, {
+        const res = await api.post(`/api/image-feeds/comments/${replyTarget.commentId}/replies`, {
           content,
         });
 
@@ -662,55 +661,85 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
       }
 
       // --- 댓글 등록 ---
-      const res = await api.post(`/image-feeds/${feedId}/comments`, { content });
+      const tempId = `temp-${Date.now()}`;
+      const me = myUsername || 'me';
+      const optimistic: CommentItem = {
+        id: tempId,
+        commentId: 0,
+        feedId,
+        content,
+        createdAtMs: Date.now(),
+        authorUsername: me,
+        authorProfileUri: buildProfileUri(me, undefined),
+        replyCount: 0,
+        replies: [],
+        repliesLoaded: true,
+        repliesLoading: false,
+        pending: true,
+      };
+      setComments(prev => [optimistic, ...prev]);
+      scrollToTop(true);
+
+      const res = await withTimeout(
+        api.post(`/api/image-feeds/${feedId}/comments`, { content }),
+        10000,
+      );
       const serverCommentId = Number(res?.data?.commentId ?? res?.data?.data?.commentId);
 
-      const me = myUsername || 'me';
       if (Number.isFinite(serverCommentId) && isInt32(serverCommentId) && serverCommentId > 0) {
-        const optimistic: CommentItem = {
-          id: String(serverCommentId),
-          commentId: serverCommentId,
-          feedId,
-          content,
-          createdAtMs: Date.now(),
-          authorUsername: me,
-          authorProfileUri: buildProfileUri(me, undefined),
-          replyCount: 0,
-          replies: [],
-          repliesLoaded: true,
-          repliesLoading: false,
-        };
-        setComments(prev => [optimistic, ...prev]);
-        scrollToTop(true);
+        setComments(prev =>
+          prev.map(c =>
+            c.id === tempId
+              ? {
+                  ...c,
+                  id: String(serverCommentId),
+                  commentId: serverCommentId,
+                  pending: false,
+                }
+              : c,
+          ),
+        );
         flashHighlightComment(serverCommentId);
         onCommentCountChange?.(+1);
       } else {
-        scrollToTop(true);
+        setComments(prev => prev.filter(c => c.id !== tempId));
       }
 
       // 서버 정합성 맞추기 위해 첫 페이지 갱신
-      await fetchComments(0, false);
+      await fetchComments(0, false, { silent: true });
       return { ok: true as const };
     } catch (e: any) {
       const msg = e?.response?.data?.message ?? e?.message ?? '요청에 실패했어요.';
       setErrorMsg(String(msg));
       setText(content);
+      textRef.current = content;
+      setComments(prev => prev.filter(c => !c.pending));
       return { ok: false as const };
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleSendTouchStart = () => {
-    if (!canSubmit || submitting) return;
+  const handleSendTouchStart = (contentOverride?: string) => {
+    const content = (contentOverride ?? textRef.current).trim();
+    if (!content || submitting) return;
     animateSendPress();
-    void (async () => {
-      const result = await submit();
-      if (result.ok) {
-        animateSendSuccess();
-        requestAnimationFrame(() => inputRef.current?.focus?.());
-      }
-    })();
+    submit(content)
+      .then((result) => {
+        if (result.ok) {
+          animateSendSuccess();
+        }
+      })
+      .catch(() => {});
+  };
+
+  const handleSendPress = () => {
+    if (submitting) return;
+    setTimeout(() => {
+      const content = (textRef.current || text).trim();
+      if (!content || submitting) return;
+      handleSendTouchStart(content);
+    }, 0);
   };
 
   useEffect(() => {
@@ -751,13 +780,20 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
           },
         ]}
       >
-        <Image
-          source={{ uri: r.authorProfileUri || seedAvatar(r.authorUsername) }}
-          style={styles.replyAvatar}
-        />
+        <TouchableOpacity
+          onPress={() => navigateToProfile(r.authorUsername)}
+          activeOpacity={0.8}
+        >
+          <Image
+            source={{ uri: r.authorProfileUri || seedAvatar(r.authorUsername) }}
+            style={styles.replyAvatar}
+          />
+        </TouchableOpacity>
         <View style={styles.replyBody}>
           <View style={styles.replyHeaderLine}>
-            <Text style={styles.replyUsername}>@{r.authorUsername}</Text>
+            <TouchableOpacity onPress={() => navigateToProfile(r.authorUsername)}>
+              <Text style={styles.replyUsername}>@{r.authorUsername}</Text>
+            </TouchableOpacity>
             <Text style={styles.replyTime}> · {timeAgo(r.createdAtMs)}</Text>
 
             {isMine ? (
@@ -793,14 +829,24 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
         ]}
       >
         <View style={styles.commentRow}>
-          <Image
-            source={{ uri: item.authorProfileUri || seedAvatar(item.authorUsername) }}
-            style={styles.commentAvatar}
-          />
+          <TouchableOpacity
+            onPress={() => navigateToProfile(item.authorUsername)}
+            activeOpacity={0.8}
+          >
+            <Image
+              source={{ uri: item.authorProfileUri || seedAvatar(item.authorUsername) }}
+              style={styles.commentAvatar}
+            />
+          </TouchableOpacity>
           <View style={styles.commentBody}>
             <View style={styles.commentHeaderLine}>
-              <Text style={styles.commentUsername}>@{item.authorUsername}</Text>
+              <TouchableOpacity onPress={() => navigateToProfile(item.authorUsername)}>
+                <Text style={styles.commentUsername}>@{item.authorUsername}</Text>
+              </TouchableOpacity>
               <Text style={styles.commentTime}> · {timeAgo(item.createdAtMs)}</Text>
+              {item.pending ? (
+                <Text style={styles.commentPending}> · 등록 중</Text>
+              ) : null}
 
               {isMine ? (
                 <TouchableOpacity
@@ -923,15 +969,20 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
               </View>
             ) : (
               <FlatList
-                ref={r => (listRef.current = r)}
+                ref={r => {
+                  listRef.current = r;
+                }}
                 data={comments}
                 keyExtractor={c => c.id}
                 renderItem={renderItem}
                 keyboardShouldPersistTaps="always"
-                onEndReached={loadMore}
+                onEndReached={canLoadMore ? loadMore : undefined}
                 onEndReachedThreshold={0.3}
                 refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}
-                contentContainerStyle={[styles.listContent, comments.length === 0 && { flexGrow: 1 }]}
+                contentContainerStyle={[
+                  styles.listContent,
+                  comments.length === 0 && styles.listContentEmpty,
+                ]}
                 ListEmptyComponent={
                   <View style={styles.empty}>
                     <Text style={styles.emptyText}>{errorMsg ? errorMsg : '아직 댓글이 없어요.'}</Text>
@@ -953,9 +1004,14 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
 
               <View style={styles.inputCard}>
                 <TextInput
-                  ref={r => (inputRef.current = r)}
+                  ref={r => {
+                    inputRef.current = r;
+                  }}
                   value={text}
-                  onChangeText={setText}
+                  onChangeText={value => {
+                    textRef.current = value;
+                    setText(value);
+                  }}
                   placeholder={placeholder}
                   placeholderTextColor="#9aa0a6"
                   style={styles.input}
@@ -964,18 +1020,19 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
                   submitBehavior="submit"
                   returnKeyType="send"
                   onSubmitEditing={() => {
-                    if (!canSubmit || submitting) return;
+                    const content = (textRef.current || text).trim();
+                    if (!content || submitting) return;
                     animateSendPress();
-                    void (async () => {
-                      const result = await submit();
-                      if (result.ok) animateSendSuccess();
-                      requestAnimationFrame(() => inputRef.current?.focus?.());
-                    })();
+                    submit(content)
+                      .then((result) => {
+                        if (result.ok) animateSendSuccess();
+                      })
+                      .catch(() => {});
                   }}
                 />
 
                 <Pressable
-                  onTouchStart={handleSendTouchStart}
+                  onTouchStart={handleSendPress}
                   disabled={!canSubmit || submitting}
                   style={({ pressed }) => [
                     styles.sendBtn,
@@ -1040,6 +1097,7 @@ const styles = StyleSheet.create({
   loadingText: { color: '#9aa0a6', fontSize: 13, fontWeight: '700' },
 
   listContent: { paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6 },
+  listContentEmpty: { flexGrow: 1 },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   emptyText: {
     color: '#9aa0a6',
@@ -1067,6 +1125,7 @@ const styles = StyleSheet.create({
   commentHeaderLine: { flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap' },
   commentUsername: { color: '#111827', fontSize: 13, fontWeight: '800' },
   commentTime: { color: '#9aa0a6', fontSize: 12, fontWeight: '700' },
+  commentPending: { color: '#9aa0a6', fontSize: 12, fontWeight: '700' },
   moreBtn: { marginLeft: 'auto', paddingHorizontal: 6, paddingVertical: 4 },
   commentText: {
     marginTop: 4,

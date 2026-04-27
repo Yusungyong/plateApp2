@@ -6,7 +6,7 @@ import AuthTextInput from '../../../components/common/AuthTextInput';
 type Props = {
   nickname: string;
   onChangeNickname: (text: string) => void;
-  inputRef: React.RefObject<TextInput>;
+  inputRef: React.RefObject<TextInput | null>;
   onSubmitEditing: () => void;
   onValidityChange?: (valid: boolean) => void; // ✅ 닉네임 유효 여부
 };

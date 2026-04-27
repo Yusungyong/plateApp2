@@ -1,11 +1,11 @@
 // src/screens/ImageFeed/components/FeedPage.tsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Image, Text, TouchableOpacity, View, StyleSheet, Dimensions } from 'react-native';
-import Config from 'react-native-config';
+import { FEED_IMAGE_BUCKET } from '../../../config/buckets';
 import type { ImageFeedViewerResponse } from '../../../api/imageFeedApi';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
-const IMAGE_BASE_URL = Config.FEED_IMAGE_BUCKET ?? '';
+const IMAGE_BASE_URL = FEED_IMAGE_BUCKET || '';
 
 const joinUrl = (base?: string, path?: string) => {
   if (!path) return null;
@@ -157,7 +157,7 @@ export default React.memo(function FeedPage({
         windowSize={3}
         maxToRenderPerBatch={2}
         nestedScrollEnabled
-        removeClippedSubviews={false}
+        removeClippedSubviews={true}
         viewabilityConfig={hViewabilityConfig}
         onViewableItemsChanged={onHViewableItemsChanged}
       />

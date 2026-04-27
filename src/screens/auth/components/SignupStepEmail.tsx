@@ -6,7 +6,7 @@ import AuthTextInput from '../../../components/common/AuthTextInput';
 type Props = {
   value: string;
   onChangeText: (text: string) => void;
-  inputRef: React.RefObject<TextInput>;
+  inputRef: React.RefObject<TextInput | null>;
   onSubmitEditing: () => void;
   onValidityChange?: (valid: boolean) => void; // ✅ 이메일 유효 여부 부모로 전달
 };

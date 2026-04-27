@@ -1,0 +1,62 @@
+{
+  "project_info": {
+    "project_number": "398195276422",
+    "project_id": "newplateapp",
+    "storage_bucket": "newplateapp.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:398195276422:android:96205ca8a13c68203f6f07",
+        "android_client_info": {
+          "package_name": "com.plateappnew"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "398195276422-k2t4d8qv7ch9kiisqscmo2jjfacfjb13.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.plateappnew",
+            "certificate_hash": "44d6ef7c8f92390e8d63dc1efbdeaf86556e2fb4"
+          }
+        },
+        {
+          "client_id": "398195276422-rkvdhndl9n2g3l4qf2j7ch742be0g5fs.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.plateappnew",
+            "certificate_hash": "5e8f16062ea3cd2c4a0d547876baa6f38cabf625"
+          }
+        },
+        {
+          "client_id": "398195276422-4hosgi2odjcq47hoqhrk5lc37eo5dcbi.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDepwXQJajOZW6PPkRZhlmpF1NszyZhSEI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "398195276422-4hosgi2odjcq47hoqhrk5lc37eo5dcbi.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "398195276422-d589m58ias8ueppqnged6bp6he71ekv7.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "org.reactjs.native.example.plateAppNew"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

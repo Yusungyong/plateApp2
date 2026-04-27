@@ -25,7 +25,7 @@ export async function getDeviceInfo(): Promise<DeviceInfoPayload> {
       osVersion,
       appVersion,
     };
-  } catch (e) {
+  } catch {
     // 실패해도 로그인 자체는 막지 않기 위해 null로 채움
     return {
       deviceId: null,

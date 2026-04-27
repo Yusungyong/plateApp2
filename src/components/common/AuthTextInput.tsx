@@ -1,35 +1,38 @@
 // src/components/common/AuthTextInput.tsx
-import React, { useState } from 'react';
+import React, { forwardRef, useMemo, useState } from 'react';
 import {
   View,
   Text,
   TextInput,
   StyleSheet,
   TextInputProps,
-  NativeSyntheticEvent,
-  TextInputFocusEventData,
 } from 'react-native';
-import { colors, radius, spacing, typography } from '../../styles/theme';
+import { useTheme } from '../../styles/theme';
 
 interface AuthTextInputProps extends TextInputProps {
   label: string;
 }
 
-const AuthTextInput: React.FC<AuthTextInputProps> = ({
+const AuthTextInput = forwardRef<TextInput, AuthTextInputProps>(({
   label,
   style,
   onFocus,
   onBlur,
   ...inputProps
-}) => {
+}, ref) => {
   const [focused, setFocused] = useState(false);
+  const { colors, radius, spacing, typography } = useTheme();
+  const styles = useMemo(
+    () => createStyles({ colors, radius, spacing, typography }),
+    [colors, radius, spacing, typography],
+  );
 
-  const handleFocus = (e: NativeSyntheticEvent<TextInputFocusEventData>) => {
+  const handleFocus: NonNullable<TextInputProps['onFocus']> = (e) => {
     setFocused(true);
     onFocus?.(e);
   };
 
-  const handleBlur = (e: NativeSyntheticEvent<TextInputFocusEventData>) => {
+  const handleBlur: NonNullable<TextInputProps['onBlur']> = (e) => {
     setFocused(false);
     onBlur?.(e);
   };
@@ -40,6 +43,7 @@ const AuthTextInput: React.FC<AuthTextInputProps> = ({
 
       <View style={[styles.inputWrapper, focused && styles.inputWrapperFocused]}>
         <TextInput
+          ref={ref}
           {...inputProps}
           style={[styles.input, style]}
           placeholderTextColor={colors.textMuted}
@@ -49,33 +53,46 @@ const AuthTextInput: React.FC<AuthTextInputProps> = ({
       </View>
     </View>
   );
-};
-
-const styles = StyleSheet.create({
-  container: {
-    marginBottom: spacing.lg,
-  },
-  label: {
-    ...typography.label,
-    marginBottom: spacing.xs,
-  },
-  inputWrapper: {
-    height: 52,
-    borderRadius: radius.lg,
-    backgroundColor: colors.backgroundSoft, // 연한 회색 배경
-    borderWidth: 1,
-    borderColor: 'transparent',
-    paddingHorizontal: spacing.md,
-    justifyContent: 'center',
-  },
-  inputWrapperFocused: {
-    backgroundColor: colors.background, // 포커스 시 살짝 더 밝게
-    borderColor: colors.brandPrimary,
-  },
-  input: {
-    fontSize: 16,
-    color: colors.textPrimary,
-  },
 });
+
+AuthTextInput.displayName = 'AuthTextInput';
+
+const createStyles = ({
+  colors,
+  radius,
+  spacing,
+  typography,
+}: {
+  colors: ReturnType<typeof useTheme>['colors'];
+  radius: ReturnType<typeof useTheme>['radius'];
+  spacing: ReturnType<typeof useTheme>['spacing'];
+  typography: ReturnType<typeof useTheme>['typography'];
+}) =>
+  StyleSheet.create({
+    container: {
+      marginBottom: spacing.lg,
+    },
+    label: {
+      ...typography.label,
+      marginBottom: spacing.xs,
+    },
+    inputWrapper: {
+      height: 52,
+      borderRadius: radius.lg,
+      backgroundColor: colors.backgroundSoft, // 연한 회색 배경
+      borderWidth: 1,
+      borderColor: 'transparent',
+      paddingHorizontal: spacing.md,
+      justifyContent: 'center',
+    },
+    inputWrapperFocused: {
+      backgroundColor: colors.background, // 포커스 시 살짝 더 밝게
+      borderColor: colors.brandPrimary,
+    },
+    input: {
+      fontSize: 16,
+      color: colors.textPrimary,
+    },
+  });
 
 export default AuthTextInput;

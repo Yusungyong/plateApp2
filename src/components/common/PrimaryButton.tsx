@@ -1,7 +1,7 @@
 // src/components/common/PrimaryButton.tsx
-import React from 'react';
+import React, { useMemo } from 'react';
 import { TouchableOpacity, Text, StyleSheet, ActivityIndicator, ViewStyle } from 'react-native';
-import { colors, radius, spacing, typography } from '../../styles/theme';
+import { useTheme } from '../../styles/theme';
 
 interface PrimaryButtonProps {
   title: string;
@@ -19,6 +19,11 @@ const PrimaryButton: React.FC<PrimaryButtonProps> = ({
   style,
 }) => {
   const isDisabled = disabled || loading;
+  const { colors, radius, spacing, typography } = useTheme();
+  const styles = useMemo(
+    () => createStyles({ colors, radius, spacing, typography }),
+    [colors, radius, spacing, typography],
+  );
 
   return (
     <TouchableOpacity
@@ -36,22 +41,33 @@ const PrimaryButton: React.FC<PrimaryButtonProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
-  button: {
-    height: 48,
-    borderRadius: radius.lg,
-    backgroundColor: colors.brandPrimary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginTop: spacing.lg,
-  },
-  buttonDisabled: {
-    backgroundColor: colors.brandDisabled,
-  },
-  text: {
-    color: '#FFFFFF',
-    ...typography.button,
-  },
-});
+const createStyles = ({
+  colors,
+  radius,
+  spacing,
+  typography,
+}: {
+  colors: ReturnType<typeof useTheme>['colors'];
+  radius: ReturnType<typeof useTheme>['radius'];
+  spacing: ReturnType<typeof useTheme>['spacing'];
+  typography: ReturnType<typeof useTheme>['typography'];
+}) =>
+  StyleSheet.create({
+    button: {
+      height: 48,
+      borderRadius: radius.lg,
+      backgroundColor: colors.brandPrimary,
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginTop: spacing.lg,
+    },
+    buttonDisabled: {
+      backgroundColor: colors.brandDisabled,
+    },
+    text: {
+      color: '#FFFFFF',
+      ...typography.button,
+    },
+  });
 
 export default PrimaryButton;

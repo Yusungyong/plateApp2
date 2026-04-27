@@ -5,11 +5,21 @@ type Params = {
   username: string;
   initialStoreId: number;
   initialPlaceId: string;
+  seedItems?: VideoFeedItem[];
+  seedIndex?: number;
+  disableLoadMore?: boolean;
 };
 
 const keyOf = (v: VideoFeedItem) => `${v.storeId}_${v.placeId}`;
 
-export const useVideoFeedData = ({ username, initialStoreId, initialPlaceId }: Params) => {
+export const useVideoFeedData = ({
+  username,
+  initialStoreId,
+  initialPlaceId,
+  seedItems,
+  seedIndex,
+  disableLoadMore,
+}: Params) => {
   const [videos, setVideos] = useState<VideoFeedItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -22,7 +32,7 @@ export const useVideoFeedData = ({ username, initialStoreId, initialPlaceId }: P
 
   // loadMore 잠금
   const loadingMoreRef = useRef(false);
-  const lastLoadMorePlaceIdRef = useRef<string | null>(null);
+  const lastLoadMoreKeyRef = useRef<string | null>(null);
 
   const appendDeduped = useCallback((more: VideoFeedItem[]) => {
     if (!more?.length) return;
@@ -35,21 +45,25 @@ export const useVideoFeedData = ({ username, initialStoreId, initialPlaceId }: P
   }, []);
 
   const loadMore = useCallback(
-    async (placeIdForNext: string) => {
+    async (placeIdForNext: string, storeIdForNext?: number) => {
       if (!placeIdForNext) return;
       if (loadingMoreRef.current) return;
-      if (lastLoadMorePlaceIdRef.current === placeIdForNext) return;
+      const key = `${placeIdForNext}:${storeIdForNext ?? ''}`;
+      if (lastLoadMoreKeyRef.current === key) return;
 
       loadingMoreRef.current = true;
-      lastLoadMorePlaceIdRef.current = placeIdForNext;
+      lastLoadMoreKeyRef.current = key;
       setLoadingMore(true);
 
       try {
-        const more = await fetchVideoFeed({ username, placeId: placeIdForNext });
+        const more = await fetchVideoFeed({
+          username,
+          placeId: placeIdForNext,
+          storeId: storeIdForNext,
+        });
         if (more?.length) appendDeduped(more);
-      } catch (e) {
-        console.error('[VideoFeed] loadMore error', e);
-        lastLoadMorePlaceIdRef.current = null;
+      } catch {
+        lastLoadMoreKeyRef.current = null;
       } finally {
         loadingMoreRef.current = false;
         setLoadingMore(false);
@@ -60,17 +74,18 @@ export const useVideoFeedData = ({ username, initialStoreId, initialPlaceId }: P
 
   const maybeTriggerLoadMore = useCallback(
     (currentIndex: number) => {
+      if (disableLoadMore) return;
       const list = videosRef.current;
       const length = list.length;
       if (length < 3) return;
 
-      const nearEnd = Math.max(0, length - 2);
+      const nearEnd = Math.max(0, length - 3);
       if (currentIndex < nearEnd) return;
 
       const cur = list[currentIndex];
-      if (cur?.placeId) loadMore(cur.placeId);
+      if (cur?.placeId) loadMore(cur.placeId, cur.storeId);
     },
-    [loadMore],
+    [disableLoadMore, loadMore],
   );
 
   const loadInitial = useCallback(async () => {
@@ -80,7 +95,20 @@ export const useVideoFeedData = ({ username, initialStoreId, initialPlaceId }: P
 
       // 초기 로딩 시 잠금 리셋
       loadingMoreRef.current = false;
-      lastLoadMorePlaceIdRef.current = null;
+      lastLoadMoreKeyRef.current = null;
+
+      if (seedItems && seedItems.length > 0) {
+        const safe = seedItems;
+        setVideos(safe);
+        videosRef.current = safe;
+
+        const idx =
+          typeof seedIndex === 'number'
+            ? Math.max(0, Math.min(seedIndex, safe.length - 1))
+            : safe.findIndex(v => v.storeId === initialStoreId);
+        const startIndex = idx >= 0 ? idx : 0;
+        return { videos: safe, startIndex };
+      }
 
       const data = await fetchVideoFeed({
         username,
@@ -96,8 +124,7 @@ export const useVideoFeedData = ({ username, initialStoreId, initialPlaceId }: P
       const startIndex = idx >= 0 ? idx : 0;
 
       return { videos: safe, startIndex };
-    } catch (e) {
-      console.error('[VideoFeed] loadInitial error', e);
+    } catch {
       setErrorMsg('동영상 피드를 불러오는데 실패했어요.');
       setVideos([]);
       videosRef.current = [];
@@ -105,7 +132,7 @@ export const useVideoFeedData = ({ username, initialStoreId, initialPlaceId }: P
     } finally {
       setLoading(false);
     }
-  }, [username, initialStoreId, initialPlaceId]);
+  }, [username, initialStoreId, initialPlaceId, seedItems, seedIndex]);
 
   return {
     videos,

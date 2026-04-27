@@ -6,9 +6,9 @@ import {
   StyleSheet,
   ActivityIndicator,
   Image,
+  Animated,
 } from 'react-native';
 import Video, { OnLoadData, OnProgressData } from 'react-native-video';
-import Config from 'react-native-config';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { useNavigation } from '@react-navigation/native';
 
@@ -17,21 +17,15 @@ import {
   createHomeVideoWatchHistory,
 } from '../../../api/homeVideoApi';
 import { useAuth } from '../../../auth/AuthProvider';
+import {
+  buildHomeVideoAssetUrl,
+  buildHomeVideoThumbUrl,
+  isRenderableHomeVideoThumbPath,
+} from '../utils/videoUtils';
+import { HOME_COLORS, HOME_RADII } from '../styles/homeTokens';
+import { createLogger } from '../../../utils/logger';
 
-const FILE_BASE_URL = Config.VIDEO_BUCKET;
-
-const UI_THROTTLE_MS = 250;
-
-/** URL 조합 헬퍼 (// 중복 방지) */
-const joinUrl = (base?: string, path?: string | null) => {
-  if (!base || !path) return undefined;
-  const trimmedBase = base.endsWith('/') ? base.slice(0, -1) : base;
-  const trimmedPath = path.startsWith('/') ? path.slice(1) : path;
-  return `${trimmedBase}/${trimmedPath}`;
-};
-
-/** 비디오 URL 생성 헬퍼 */
-const buildVideoUrl = (fileName?: string | null) => joinUrl(FILE_BASE_URL, fileName);
+const logger = createLogger('[HomeVideoPreviewRow]');
 
 const formatMMSS = (seconds: number) => {
   const m = Math.floor(seconds / 60);
@@ -48,8 +42,6 @@ type MiniVideoCardProps = {
   // ✅ 실제 재생 여부(홈 포커스 등)
   isPlaying: boolean;
 
-  // UI용 진행상태
-  currentTime: number;
   duration: number;
 
   onLoad: (data: OnLoadData) => void;
@@ -62,13 +54,80 @@ const MiniVideoCard: React.FC<MiniVideoCardProps> = ({
   video,
   playReady,
   isPlaying,
-  currentTime,
   duration,
   onLoad,
   onProgress,
   onError,
   onPress,
 }) => {
+  const createdAt = video?.createdAt ?? video?.updatedAt;
+  const videoUrl = useMemo(
+    () => buildHomeVideoAssetUrl(video?.fileName, createdAt),
+    [createdAt, video?.fileName],
+  );
+
+  const thumbUrl = useMemo(
+    () =>
+      video?.thumbnail && isRenderableHomeVideoThumbPath(video.thumbnail)
+        ? buildHomeVideoThumbUrl(video.thumbnail, createdAt)
+        : undefined,
+    [createdAt, video?.thumbnail],
+  );
+
+  const [isVideoLoaded, setIsVideoLoaded] = useState(false);
+  const [thumbLoadFailed, setThumbLoadFailed] = useState(false);
+  const videoOpacity = useRef(new Animated.Value(0)).current;
+
+  const displayTitle = video?.title?.trim() || video?.storeName?.trim() || '제목 없음';
+  const displayAddress = video?.address ?? '';
+
+  const totalSeconds =
+    duration > 0
+      ? Math.round(duration)
+      : typeof video?.videoDuration === 'number'
+      ? Math.round(video.videoDuration)
+      : 0;
+
+  const displayDuration = totalSeconds > 0 ? formatMMSS(totalSeconds) : '';
+
+  useEffect(() => {
+    if (thumbUrl) {
+      logger.debug('thumbnail resolved', {
+        storeId: video?.storeId,
+        title: displayTitle,
+        originalThumbnail: video?.thumbnail,
+        createdAt,
+        thumbUrl,
+      });
+    } else {
+      logger.warn('thumbnail missing or skipped', {
+        storeId: video?.storeId,
+        title: displayTitle,
+        originalThumbnail: video?.thumbnail,
+        createdAt,
+        renderable: isRenderableHomeVideoThumbPath(video?.thumbnail),
+      });
+    }
+  }, [createdAt, displayTitle, thumbUrl, video?.storeId, video?.thumbnail]);
+
+  const shouldRenderVideo = !!videoUrl && playReady;
+  const paused = !isPlaying;
+
+  useEffect(() => {
+    setIsVideoLoaded(false);
+    setThumbLoadFailed(false);
+    videoOpacity.setValue(0);
+  }, [videoUrl, playReady, videoOpacity]);
+
+  useEffect(() => {
+    if (!isVideoLoaded) return;
+    Animated.timing(videoOpacity, {
+      toValue: 1,
+      duration: 220,
+      useNativeDriver: true,
+    }).start();
+  }, [isVideoLoaded, videoOpacity]);
+
   if (!video) {
     return (
       <View style={[styles.miniCard, styles.miniCardEmpty]}>
@@ -79,74 +138,63 @@ const MiniVideoCard: React.FC<MiniVideoCardProps> = ({
     );
   }
 
-  const videoUrl = buildVideoUrl(video.fileName);
-
-  // 썸네일 있으면 poster로 사용 (없으면 fileName으로 fallback)
-  // HomeVideoThumbnail에 thumbnail 필드가 있다면 그대로 사용됨
-  // @ts-ignore
-  const thumb = video?.thumbnail ? buildVideoUrl((video as any).thumbnail) : undefined;
-  const posterUrl = thumb || videoUrl;
-
-  const progressPercent =
-    duration > 0 ? Math.min((currentTime / duration) * 100, 100) : 0;
-
-  const displayTitle = video.title?.trim() || video.storeName?.trim() || '제목 없음';
-  const displayAddress = video.address ?? '';
-
-  const totalSeconds =
-    duration > 0
-      ? Math.round(duration)
-      : typeof video.videoDuration === 'number'
-      ? Math.round(video.videoDuration)
-      : 0;
-
-  const displayDuration = totalSeconds > 0 ? formatMMSS(totalSeconds) : '';
-
-  const shouldRenderVideo = !!videoUrl && playReady; // ✅ 300ms 뒤에만 Video mount
-  const paused = !isPlaying; // ✅ 두 썸네일 모두 “재생 상태”일 때만 재생
-
   return (
     <View style={styles.miniCard}>
+      <View style={styles.glowBorder} pointerEvents="none" />
       <TouchableOpacity activeOpacity={1} style={styles.miniVideoWrapper} onPress={onPress}>
-        {shouldRenderVideo ? (
-          <Video
-            source={{ uri: videoUrl! }}
+        {thumbUrl && !thumbLoadFailed ? (
+          <Image
+            source={{ uri: thumbUrl, cache: 'force-cache' }}
             style={styles.video}
             resizeMode="cover"
-            repeat
-            paused={paused}
-            onLoad={onLoad}
-            onProgress={onProgress}
-            onError={onError}
-            progressUpdateInterval={500} // ✅ progress 이벤트 과다 방지
-
-            // ✅ 썸네일 방식 이식: 무음 자동재생 + 오디오 충돌 최소화
-            muted
-            volume={0}
-            ignoreSilentSwitch="ignore"
-            // @ts-ignore
-            mixWithOthers="mix"
-            // @ts-ignore
-            disableFocus
-
-            playInBackground={false}
-            playWhenInactive={false}
-
-            // ✅ iOS 오디오 세션 폭주 줄이기(react-native-video 6.x)
-            disableAudioSessionManagement={true}
-
-            // ✅ 검은 프레임 방지
-            poster={posterUrl}
-            posterResizeMode="cover"
+            onError={(event) => {
+              setThumbLoadFailed(true);
+              logger.warn('thumbnail image load failed', {
+                storeId: video?.storeId,
+                thumbUrl,
+                error: event.nativeEvent,
+              });
+            }}
           />
         ) : (
-          // ✅ Video가 아직 mount 전이면 썸네일을 보여줌(깜박 방지)
-          <Image
-            source={{ uri: posterUrl || undefined }}
-            style={styles.video}
-            resizeMode="cover"
-          />
+          <View style={[styles.video, styles.videoPlaceholder]}>
+            <Icon name="videocam" size={28} color="rgba(255,255,255,0.7)" />
+          </View>
         )}
+        {shouldRenderVideo ? (
+          <Animated.View style={[styles.video, { opacity: videoOpacity }]}>
+            <Video
+              source={{ uri: videoUrl! }}
+              style={StyleSheet.absoluteFillObject}
+              resizeMode="cover"
+              repeat
+              paused={paused}
+              onLoad={(data) => {
+                setIsVideoLoaded(true);
+                onLoad(data);
+              }}
+              onProgress={onProgress}
+              onError={(error) => {
+                setIsVideoLoaded(false);
+                videoOpacity.setValue(0);
+                onError(error);
+              }}
+              progressUpdateInterval={500}
+              muted
+              volume={0}
+              ignoreSilentSwitch="ignore"
+              // @ts-ignore
+              mixWithOthers="mix"
+              // @ts-ignore
+              disableFocus
+              playInBackground={false}
+              playWhenInactive={false}
+              disableAudioSessionManagement={true}
+              poster={thumbUrl}
+              posterResizeMode="cover"
+            />
+          </Animated.View>
+        ) : null}
 
         {displayDuration ? (
           <View style={styles.badgeDuration}>
@@ -169,12 +217,37 @@ const MiniVideoCard: React.FC<MiniVideoCardProps> = ({
         </View>
       </TouchableOpacity>
 
-      <View style={styles.miniProgressBarBackground}>
-        <View style={[styles.miniProgressBarFill, { width: `${progressPercent}%` }]} />
-      </View>
+      {/* Progress bar removed for cleaner tile */}
     </View>
   );
 };
+
+const LoadingState = () => (
+  <View style={styles.stateBox}>
+    <ActivityIndicator />
+    <Text style={styles.stateText}>불러오는 중...</Text>
+  </View>
+);
+
+const ErrorState: React.FC<{ message: string; onRetry?: () => void }> = ({
+  message,
+  onRetry,
+}) => (
+  <View style={styles.stateBox}>
+    <Text style={styles.errorText}>{message}</Text>
+    {onRetry ? (
+      <TouchableOpacity onPress={onRetry} style={styles.retryBtn}>
+        <Text style={styles.retryText}>다시 시도</Text>
+      </TouchableOpacity>
+    ) : null}
+  </View>
+);
+
+const EmptyState = () => (
+  <View style={styles.stateBox}>
+    <Text style={styles.stateText}>표시할 영상이 없어요.</Text>
+  </View>
+);
 
 type Props = {
   videos: HomeVideoThumbnail[];
@@ -182,6 +255,40 @@ type Props = {
   errorMsg?: string | null;
   onReload?: () => void;
   isFocused?: boolean;
+  showHeader?: boolean;
+  enableDualPreview?: boolean;
+  autoPlay?: boolean;
+};
+
+const prefetchThumbs = (items: Array<HomeVideoThumbnail | undefined>) => {
+  items.forEach((item) => {
+    if (!item) return;
+    const createdAt = item.createdAt ?? item.updatedAt;
+    const thumbUrl = item.thumbnail && isRenderableHomeVideoThumbPath(item.thumbnail)
+      ? buildHomeVideoThumbUrl((item as any).thumbnail, createdAt)
+      : undefined;
+    if (thumbUrl) {
+      logger.debug('prefetch thumbnail', {
+        storeId: item.storeId,
+        originalThumbnail: item.thumbnail,
+        createdAt,
+        thumbUrl,
+      });
+      Image.prefetch(thumbUrl).catch((error) => {
+        logger.warn('thumbnail prefetch failed', {
+          storeId: item.storeId,
+          thumbUrl,
+          error,
+        });
+      });
+    } else {
+      logger.warn('prefetch skipped: thumbnail url missing', {
+        storeId: item.storeId,
+        originalThumbnail: item.thumbnail,
+        createdAt,
+      });
+    }
+  });
 };
 
 const HomeVideoPreviewRow: React.FC<Props> = ({
@@ -190,34 +297,67 @@ const HomeVideoPreviewRow: React.FC<Props> = ({
   errorMsg,
   onReload,
   isFocused = true,
+  showHeader = true,
+  enableDualPreview = false,
+  autoPlay = true,
 }) => {
-  const { user } = useAuth();
+  const user = useAuth()?.user;
   const navigation = useNavigation<any>();
 
-  const leftVideo = videos[0];
-  const rightVideo = videos[1];
+  const previewVideos = useMemo(() => {
+    return videos
+      .map((video, index) => ({
+        video,
+        index,
+        hasRenderableThumb: isRenderableHomeVideoThumbPath(video.thumbnail),
+      }))
+      .sort((a, b) => {
+        if (a.hasRenderableThumb === b.hasRenderableThumb) {
+          return a.index - b.index;
+        }
+        return a.hasRenderableThumb ? -1 : 1;
+      })
+      .map((entry) => entry.video);
+  }, [videos]);
+
+  const leftVideo = previewVideos[0];
+  const rightVideo = previewVideos[1];
   const hasAnyVideo = videos.length > 0;
+  const prefetchTargets = useMemo(() => previewVideos.slice(0, 4), [previewVideos]);
 
   // ✅ 두 썸네일 “동시 재생” 조건
-  const shouldPlay = isFocused && hasAnyVideo;
+  const shouldPlay = autoPlay && isFocused && hasAnyVideo;
+
+  useEffect(() => {
+    if (!prefetchTargets.length) return;
+    prefetchThumbs(prefetchTargets);
+  }, [prefetchTargets]);
+
+  useEffect(() => {
+    if (videos.length < 2) return;
+    const leftChanged = leftVideo?.storeId !== videos[0]?.storeId;
+    const rightChanged = rightVideo?.storeId !== videos[1]?.storeId;
+    if (!leftChanged && !rightChanged) return;
+
+    logger.warn('reordered preview videos to prefer renderable thumbnails', {
+      original: videos.slice(0, 4).map((item) => ({
+        storeId: item.storeId,
+        thumbnail: item.thumbnail,
+        renderable: isRenderableHomeVideoThumbPath(item.thumbnail),
+      })),
+      preview: [leftVideo, rightVideo].filter(Boolean).map((item) => ({
+        storeId: item?.storeId,
+        thumbnail: item?.thumbnail,
+      })),
+    });
+  }, [leftVideo, rightVideo, videos]);
 
   // ✅ “이식 포인트”: 300ms 지연 후 Video mount (동시에 올라오면 부하가 커서 약간 stagger)
   const [leftPlayReady, setLeftPlayReady] = useState(false);
   const [rightPlayReady, setRightPlayReady] = useState(false);
 
-  // 진행 UI용
   const [leftDuration, setLeftDuration] = useState(0);
-  const [leftTime, setLeftTime] = useState(0);
   const [rightDuration, setRightDuration] = useState(0);
-  const [rightTime, setRightTime] = useState(0);
-
-  // ✅ 시청 이력 (중복 방지)
-  const leftWatchSentRef = useRef(false);
-  const rightWatchSentRef = useRef(false);
-
-  // progress 업데이트 쓰로틀
-  const leftTickRef = useRef(0);
-  const rightTickRef = useRef(0);
 
   // 300ms mount 지연 + 상태 초기화
   useEffect(() => {
@@ -227,16 +367,14 @@ const HomeVideoPreviewRow: React.FC<Props> = ({
     // 리스트 바뀌면 초기화
     setLeftDuration(0);
     setRightDuration(0);
-    setLeftTime(0);
-    setRightTime(0);
-
-    leftWatchSentRef.current = false;
-    rightWatchSentRef.current = false;
-
     if (shouldPlay) {
       // ✅ 동시에 mount 방지(살짝 stagger)
       t1 = setTimeout(() => setLeftPlayReady(true), 300);
-      t2 = setTimeout(() => setRightPlayReady(true), 420);
+      if (enableDualPreview) {
+        t2 = setTimeout(() => setRightPlayReady(true), 420);
+      } else {
+        setRightPlayReady(false);
+      }
     } else {
       setLeftPlayReady(false);
       setRightPlayReady(false);
@@ -246,105 +384,17 @@ const HomeVideoPreviewRow: React.FC<Props> = ({
       if (t1) clearTimeout(t1);
       if (t2) clearTimeout(t2);
     };
-  }, [shouldPlay, videos]);
-
-  // 총 duration 계산(서버값 fallback)
-  const getTotalDurationSec = useCallback(
-    (durationState: number, video?: HomeVideoThumbnail) => {
-      if (durationState > 0) return durationState;
-      if (video?.videoDuration && video.videoDuration > 0) return video.videoDuration;
-      return 0;
-    },
-    [],
-  );
-
-  // ✅ 2초 유지 시 시청 이력 저장 (썸네일 방식 이식)
-  useEffect(() => {
-    let t: ReturnType<typeof setTimeout> | null = null;
-    if (shouldPlay && leftPlayReady && leftVideo && !leftWatchSentRef.current) {
-      t = setTimeout(() => {
-        if (leftWatchSentRef.current) return;
-        leftWatchSentRef.current = true;
-        createHomeVideoWatchHistory(leftVideo.storeId, user).catch(e =>
-          console.warn('left watch history error', e),
-        );
-      }, 2000);
-    }
-    return () => {
-      if (t) clearTimeout(t);
-    };
-  }, [shouldPlay, leftPlayReady, leftVideo, user]);
-
-  useEffect(() => {
-    let t: ReturnType<typeof setTimeout> | null = null;
-    if (shouldPlay && rightPlayReady && rightVideo && !rightWatchSentRef.current) {
-      t = setTimeout(() => {
-        if (rightWatchSentRef.current) return;
-        rightWatchSentRef.current = true;
-        createHomeVideoWatchHistory(rightVideo.storeId, user).catch(e =>
-          console.warn('right watch history error', e),
-        );
-      }, 2000);
-    }
-    return () => {
-      if (t) clearTimeout(t);
-    };
-  }, [shouldPlay, rightPlayReady, rightVideo, user]);
-
-  // ✅ (옵션) 50% 도달 시도 같이 유지(먼저 걸리는 쪽으로 1회만 저장)
-  const handleLeftProgress = useCallback(
-    (data: OnProgressData) => {
-      const now = Date.now();
-      if (now - leftTickRef.current > UI_THROTTLE_MS) {
-        leftTickRef.current = now;
-        setLeftTime(data.currentTime);
-      }
-
-      if (leftWatchSentRef.current || !leftVideo) return;
-      const total = getTotalDurationSec(leftDuration, leftVideo);
-      if (total <= 0) return;
-
-      if (data.currentTime / total >= 0.5) {
-        leftWatchSentRef.current = true;
-        createHomeVideoWatchHistory(leftVideo.storeId, user).catch(e =>
-          console.warn('left watch history error', e),
-        );
-      }
-    },
-    [leftDuration, leftVideo, user, getTotalDurationSec],
-  );
-
-  const handleRightProgress = useCallback(
-    (data: OnProgressData) => {
-      const now = Date.now();
-      if (now - rightTickRef.current > UI_THROTTLE_MS) {
-        rightTickRef.current = now;
-        setRightTime(data.currentTime);
-      }
-
-      if (rightWatchSentRef.current || !rightVideo) return;
-      const total = getTotalDurationSec(rightDuration, rightVideo);
-      if (total <= 0) return;
-
-      if (data.currentTime / total >= 0.5) {
-        rightWatchSentRef.current = true;
-        createHomeVideoWatchHistory(rightVideo.storeId, user).catch(e =>
-          console.warn('right watch history error', e),
-        );
-      }
-    },
-    [rightDuration, rightVideo, user, getTotalDurationSec],
-  );
+  }, [enableDualPreview, shouldPlay, videos]);
 
   const handlePressVideo = useCallback(
     (video?: HomeVideoThumbnail) => {
       if (!video) return;
       if (!video.storeId || !video.placeId) {
-        console.warn('storeId/placeId 없음');
         return;
       }
 
       const usernameParam = user?.username ?? '';
+      createHomeVideoWatchHistory(video.storeId, user).catch(() => {});
       navigation.navigate('VideoFeedScreen', {
         username: usernameParam,
         storeId: video.storeId,
@@ -356,33 +406,30 @@ const HomeVideoPreviewRow: React.FC<Props> = ({
 
   return (
     <View style={styles.previewContainer}>
-      <View style={styles.previewHeaderRow}>
-        <View style={styles.headerTextWrapper}>
-          <Text style={styles.previewTitle}>오늘의 영상</Text>
-        </View>
+      {showHeader ? (
+        <View style={styles.previewHeaderRow}>
+          <View style={styles.headerTextWrapper}>
+            <Text style={styles.previewTitle}>오늘의 영상</Text>
+          </View>
 
-        {onReload && (
-          <TouchableOpacity
-            style={styles.refreshIconButton}
-            onPress={onReload}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          >
-            <Icon name="refresh" size={24} color="#777" />
-          </TouchableOpacity>
-        )}
-      </View>
+          {onReload && (
+            <TouchableOpacity
+              style={styles.refreshIconButton}
+              onPress={onReload}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Icon name="refresh" size={24} color="#777" />
+            </TouchableOpacity>
+          )}
+        </View>
+      ) : null}
 
       {loading && (
-        <View style={styles.loadingRow}>
-          <ActivityIndicator />
-          <Text style={styles.loadingText}>영상을 불러오는 중...</Text>
-        </View>
+        <LoadingState />
       )}
 
       {errorMsg && !loading && (
-        <View style={styles.errorRow}>
-          <Text style={styles.errorText}>{errorMsg}</Text>
-        </View>
+        <ErrorState message={errorMsg} onRetry={onReload} />
       )}
 
       {hasAnyVideo ? (
@@ -391,33 +438,25 @@ const HomeVideoPreviewRow: React.FC<Props> = ({
             video={leftVideo}
             playReady={leftPlayReady}
             isPlaying={shouldPlay && !!leftVideo}
-            currentTime={leftTime}
             duration={leftDuration}
             onLoad={data => setLeftDuration(data.duration)}
-            onProgress={handleLeftProgress}
+            onProgress={(_data) => {}}
             onError={() => {}}
             onPress={() => handlePressVideo(leftVideo)}
           />
           <MiniVideoCard
             video={rightVideo}
-            playReady={rightPlayReady}
+            playReady={enableDualPreview ? rightPlayReady : false}
             isPlaying={shouldPlay && !!rightVideo}
-            currentTime={rightTime}
             duration={rightDuration}
             onLoad={data => setRightDuration(data.duration)}
-            onProgress={handleRightProgress}
+            onProgress={(_data) => {}}
             onError={() => {}}
             onPress={() => handlePressVideo(rightVideo)}
           />
         </View>
-      ) : !loading ? (
-        <View style={styles.emptyStateBox}>
-          <Text style={styles.emptyEmoji}>🍽️</Text>
-          <Text style={styles.emptyTitle}>아직 보여줄 영상이 없어요</Text>
-          <Text style={styles.emptySub}>
-            새로운 맛집 방문을 기록하면 여기에서 바로 볼 수 있어요.
-          </Text>
-        </View>
+      ) : !loading && !errorMsg ? (
+        <EmptyState />
       ) : null}
     </View>
   );
@@ -428,8 +467,8 @@ export default HomeVideoPreviewRow;
 const styles = StyleSheet.create({
   previewContainer: {
     paddingHorizontal: 4,
-    marginBottom: 20,
-    paddingTop: 24,
+    marginBottom: 10,
+    paddingTop: 8,
   },
   previewHeaderRow: {
     flexDirection: 'row',
@@ -441,7 +480,7 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   previewTitle: {
-    fontSize: 24,
+    fontSize: 18,
     fontWeight: '700',
   },
   refreshIconButton: {
@@ -452,22 +491,33 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  loadingRow: {
-    flexDirection: 'row',
+  stateBox: {
+    paddingVertical: 18,
     alignItems: 'center',
-    marginBottom: 6,
+    justifyContent: 'center',
+    borderRadius: HOME_RADII.input,
+    backgroundColor: HOME_COLORS.surfaceMuted,
   },
-  loadingText: {
-    marginLeft: 6,
-    fontSize: 11,
-    color: '#666',
-  },
-  errorRow: {
-    marginBottom: 6,
+  stateText: {
+    marginTop: 8,
+    fontSize: 13,
+    color: HOME_COLORS.textSubtle,
   },
   errorText: {
-    color: '#d9534f',
+    fontSize: 13,
+    color: HOME_COLORS.textDanger,
+    marginBottom: 10,
+  },
+  retryBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: HOME_RADII.input,
+    backgroundColor: HOME_COLORS.ink,
+  },
+  retryText: {
+    color: HOME_COLORS.textOnDark,
     fontSize: 12,
+    fontWeight: '700',
   },
 
   miniRow: {
@@ -477,13 +527,26 @@ const styles = StyleSheet.create({
 
   miniCard: {
     width: '48%',
+    position: 'relative',
+    borderRadius: 20,
+    padding: 4,
+  },
+  glowBorder: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: 'rgba(255, 200, 120, 0.5)',
+    shadowColor: '#ffc778',
+    shadowOpacity: 0.7,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 0 },
   },
   miniCardEmpty: {
     minHeight: 220,
-    borderRadius: 16,
+    borderRadius: HOME_RADII.cardSmall,
     borderWidth: 1,
-    borderColor: '#eee',
-    backgroundColor: '#fafafa',
+    borderColor: HOME_COLORS.borderLight,
+    backgroundColor: HOME_COLORS.surfaceSubtle,
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 10,
@@ -499,19 +562,24 @@ const styles = StyleSheet.create({
   },
   miniEmptySub: {
     fontSize: 11,
-    color: '#888',
+    color: HOME_COLORS.textLight,
     textAlign: 'center',
   },
 
   miniVideoWrapper: {
     width: '100%',
     aspectRatio: 9 / 16,
-    borderRadius: 16,
+    borderRadius: HOME_RADII.cardSmall,
     overflow: 'hidden',
-    backgroundColor: '#000',
+    backgroundColor: HOME_COLORS.overlayDark,
   },
   video: {
     ...StyleSheet.absoluteFillObject,
+  },
+  videoPlaceholder: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: HOME_COLORS.ink,
   },
 
   badgeDuration: {
@@ -525,7 +593,7 @@ const styles = StyleSheet.create({
   },
   badgeDurationText: {
     fontSize: 11,
-    color: '#fff',
+    color: HOME_COLORS.textOnDark,
     fontWeight: '600',
   },
 
@@ -550,48 +618,17 @@ const styles = StyleSheet.create({
   bottomTitleText: {
     fontSize: 14,
     fontWeight: '700',
-    color: '#fff',
+    color: HOME_COLORS.textOnDark,
   },
   bottomAddressText: {
     marginTop: 2,
     fontSize: 11,
-    color: '#e6e6e6',
+    color: HOME_COLORS.textFaint,
   },
 
   miniProgressBarBackground: {
-    marginTop: 6,
-    height: 3,
-    borderRadius: 2,
-    backgroundColor: '#e0e0e0',
-    overflow: 'hidden',
+    display: 'none',
   },
-  miniProgressBarFill: {
-    height: '100%',
-    backgroundColor: '#4a90e2',
-  },
+  miniProgressBarFill: {},
 
-  emptyStateBox: {
-    marginTop: 8,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#eee',
-    backgroundColor: '#fafafa',
-    paddingVertical: 16,
-    paddingHorizontal: 12,
-    alignItems: 'center',
-  },
-  emptyEmoji: {
-    fontSize: 28,
-    marginBottom: 6,
-  },
-  emptyTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    marginBottom: 4,
-  },
-  emptySub: {
-    fontSize: 11,
-    color: '#888',
-    textAlign: 'center',
-  },
 });
