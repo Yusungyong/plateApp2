@@ -10,10 +10,12 @@ import {
   KeyboardAvoidingView,
   Platform,
   Dimensions,
+  Image,
 } from 'react-native';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { launchImageLibrary } from 'react-native-image-picker';
+import { launchImageLibrary, type Asset } from 'react-native-image-picker';
+import ImageResizer from '@bam.tech/react-native-image-resizer';
 import Config from 'react-native-config';
 import { FEED_IMAGE_BUCKET } from '../../config/buckets';
 import AppLayout from '../../components/layout/AppLayout';
@@ -23,8 +25,13 @@ import {
   updateImageFeed,
   fetchImageFeedViewer,
   addImageFeedImages,
+  deleteImageFeedImage,
+  replaceImageFeedImage,
   type ImageFeedPayload,
 } from '../../api/imageFeedApi';
+import { createFriendVisits } from '../../api/friendVisitsApi';
+import { createPlace } from '../../api/placeApi';
+import { geocodeAddress } from '../../api/geocodingApi';
 import { useAuth } from '../../auth/AuthProvider';
 import { useTheme } from '../../styles/theme';
 import { useRequireLogin } from '../../hooks/useRequireLogin';
@@ -38,10 +45,201 @@ import {
   stripHtml,
   extractFriendKeyword,
   mergeFriendValue,
+  parseFriends,
 } from '../videoFeeds/utils/suggestionUtils';
+import { todayDate } from '../videoFeeds/utils/videoUtils';
+import {
+  MOBILE_IMAGE_UPLOAD_EXTENSIONS,
+  getImageUploadValidationError,
+} from '../../utils/uploadValidation';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 type Route = RouteProp<RootStackParamList, 'ImageFeedEditor'>;
+
+type EditorImageItem = {
+  id: string;
+  uri: string;
+  width?: number;
+  height?: number;
+  fileName?: string | null;
+  mimeType?: string | null;
+  fileSize?: number | null;
+  imageId?: number | null;
+  uploadName?: string | null;
+  isPersisted: boolean;
+  isDirty?: boolean;
+};
+
+type EditorFormState = Omit<ImageFeedPayload, 'imageUrls'>;
+
+const isRemoteUri = (value?: string | null) =>
+  typeof value === 'string' && /^https?:\/\//i.test(value);
+
+const inferImageMimeType = (value?: string | null) => {
+  const extension = value?.split(/[?#]/)[0]?.split('.').pop()?.toLowerCase();
+  if (extension === 'png') return 'image/png';
+  if (extension === 'webp') return 'image/webp';
+  return 'image/jpeg';
+};
+
+const extensionFromMimeType = (mimeType?: string | null) => {
+  if (mimeType === 'image/png') return 'png';
+  if (mimeType === 'image/webp') return 'webp';
+  return 'jpg';
+};
+
+const sanitizeFileToken = (value: string) =>
+  value.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 24);
+
+const basenameOfPath = (value?: string | null) =>
+  (value ?? '')
+    .split(/[?#]/)[0]
+    .split('/')
+    .pop()
+    ?.trim() || '';
+
+const buildStableUploadName = (params: {
+  id: string;
+  fileName?: string | null;
+  mimeType?: string | null;
+}) => {
+  const base = sanitizeFileToken(params.id) || `${Date.now()}`;
+  const existingExtension = params.fileName?.split('.').pop()?.toLowerCase();
+  const extension = existingExtension || extensionFromMimeType(params.mimeType);
+  return `plate-image-${base}.${extension}`;
+};
+
+const inferResizeFormat = (mimeType?: string | null, fileName?: string | null) => {
+  if (mimeType === 'image/png' || fileName?.toLowerCase().endsWith('.png')) {
+    return 'PNG' as const;
+  }
+  if (
+    Platform.OS !== 'ios' &&
+    (mimeType === 'image/webp' || fileName?.toLowerCase().endsWith('.webp'))
+  ) {
+    return 'WEBP' as const;
+  }
+  return 'JPEG' as const;
+};
+
+const buildEditorImageId = (uri: string, index: number) => `${uri}-${index}-${Date.now()}`;
+
+const createEditorImageItem = (
+  params: Partial<EditorImageItem> & { uri: string; index: number; isPersisted: boolean },
+): EditorImageItem => ({
+  id: params.id ?? buildEditorImageId(params.uri, params.index),
+  uri: params.uri,
+  width: params.width,
+  height: params.height,
+  fileName: params.fileName ?? params.uri.split('/').pop() ?? null,
+  mimeType: params.mimeType ?? inferImageMimeType(params.fileName ?? params.uri),
+  fileSize: params.fileSize ?? null,
+  imageId: params.imageId ?? null,
+  uploadName:
+    params.uploadName ??
+    (params.isPersisted
+      ? basenameOfPath(params.fileName ?? params.uri)
+      : buildStableUploadName({
+          id: params.id ?? buildEditorImageId(params.uri, params.index),
+          fileName: params.fileName ?? params.uri,
+          mimeType: params.mimeType ?? inferImageMimeType(params.fileName ?? params.uri),
+        })),
+  isPersisted: params.isPersisted,
+  isDirty: params.isDirty ?? false,
+});
+
+const mapAssetToEditorImage = (asset: Asset, index: number): EditorImageItem | null => {
+  if (!asset.uri) {
+    return null;
+  }
+  return createEditorImageItem({
+    uri: asset.uri,
+    index,
+    width: asset.width,
+    height: asset.height,
+    fileName: asset.fileName ?? null,
+    mimeType: asset.type ?? null,
+    fileSize: asset.fileSize ?? null,
+    isPersisted: false,
+  });
+};
+
+const getEditorImageValidationError = (item: EditorImageItem) =>
+  getImageUploadValidationError(item, {
+    label: '이미지',
+    allowedExtensions: MOBILE_IMAGE_UPLOAD_EXTENSIONS,
+  });
+
+const mapUriToEditorImage = (
+  uri: string,
+  index: number,
+  isPersisted: boolean,
+  imageId?: number | null,
+): EditorImageItem =>
+  createEditorImageItem({
+    uri,
+    index,
+    imageId,
+    isPersisted,
+  });
+
+const resolveImageSize = (uri: string) =>
+  new Promise<{ width: number; height: number }>((resolve, reject) => {
+    Image.getSize(
+      uri,
+      (width, height) => resolve({ width, height }),
+      reject,
+    );
+  });
+
+const buildImageUploadFile = (item: EditorImageItem, fallbackIndex: number) => {
+  const name =
+    item.uploadName ||
+    item.fileName ||
+    `image-${Date.now()}-${fallbackIndex}.${extensionFromMimeType(item.mimeType)}`;
+  const type = item.mimeType || inferImageMimeType(name);
+  return {
+    uri: item.uri,
+    name,
+    type,
+  };
+};
+
+const resolveCreatedStoreId = (payload: unknown): number | undefined => {
+  const candidates = [
+    payload,
+    payload && typeof payload === 'object' ? (payload as any).data : undefined,
+  ];
+
+  for (const candidate of candidates) {
+    const storeId = candidate?.storeId;
+    if (typeof storeId === 'number' && Number.isFinite(storeId)) {
+      return storeId;
+    }
+  }
+
+  return undefined;
+};
+
+const withTimeout = async <T,>(
+  task: Promise<T>,
+  timeoutMs: number,
+  tag: string,
+) => {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      task,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${tag} timeout`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+};
 
 const ImageFeedEditorScreen: React.FC = () => {
   const navigation = useNavigation<Nav>();
@@ -53,17 +251,23 @@ const ImageFeedEditorScreen: React.FC = () => {
   const keyboard = useKeyboardAware();
 
   const editingFeedId = route.params?.feedId;
-  const [form, setForm] = useState<ImageFeedPayload>({
+  const [form, setForm] = useState<EditorFormState>({
     content: route.params?.initialContent ?? '',
     address: route.params?.initialAddress ?? '',
     storeName: route.params?.initialStoreName ?? '',
     placeId: route.params?.initialPlaceId ?? '',
     withFriends: route.params?.initialWithFriends ?? '',
-    imageUrls: route.params?.initialImages ?? [],
   });
   const [saving, setSaving] = useState(false);
   const [isPicking, setIsPicking] = useState(false);
   const [loadingFeed, setLoadingFeed] = useState(false);
+  const [rotatingImageId, setRotatingImageId] = useState<string | null>(null);
+  const [removedPersistedImageIds, setRemovedPersistedImageIds] = useState<number[]>([]);
+  const [imageItems, setImageItems] = useState<EditorImageItem[]>(() =>
+    (route.params?.initialImages ?? []).map((uri, index) =>
+      mapUriToEditorImage(uri, index, isRemoteUri(uri)),
+    ),
+  );
 
   const [locationInput, setLocationInput] = useState(
     [route.params?.initialStoreName, route.params?.initialAddress].filter(Boolean).join(' · ')
@@ -84,7 +288,7 @@ const ImageFeedEditorScreen: React.FC = () => {
   const locationInputRef = useRef<TextInput | null>(null);
   const loadedFeedRef = useRef(false);
 
-  const handleChange = (key: keyof ImageFeedPayload, value: string) => {
+  const handleChange = (key: keyof EditorFormState, value: string) => {
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
@@ -117,10 +321,6 @@ const ImageFeedEditorScreen: React.FC = () => {
   useEffect(() => {
     if (!editingFeedId) return;
     if (loadedFeedRef.current) return;
-    if (route.params?.initialContent) {
-      loadedFeedRef.current = true;
-      return;
-    }
 
     let mounted = true;
     const fetchDetail = async () => {
@@ -139,8 +339,16 @@ const ImageFeedEditorScreen: React.FC = () => {
           return `${b}/${p}`;
         };
 
-        const images = Array.isArray(data.images)
-          ? data.images.map((img) => joinUrl(imageBucket, img.fileName)).filter(Boolean)
+        const nextImageItems = Array.isArray(data.images)
+          ? data.images
+              .map((img, index) => {
+                const uri = joinUrl(imageBucket, img.fileName);
+                if (!uri) {
+                  return null;
+                }
+                return mapUriToEditorImage(uri, index, true, index + 1);
+              })
+              .filter((item): item is EditorImageItem => Boolean(item))
           : [];
 
         setForm((prev) => ({
@@ -150,8 +358,9 @@ const ImageFeedEditorScreen: React.FC = () => {
           storeName: data.storeName ?? '',
           placeId: data.placeId ?? '',
           withFriends: (data as any).withFriends ?? '',
-          imageUrls: images.length ? images : prev.imageUrls,
         }));
+        setImageItems(nextImageItems);
+        setRemovedPersistedImageIds([]);
 
         const composed = [data.storeName, data.location].filter(Boolean).join(' · ');
         setLocationInput(composed);
@@ -169,7 +378,7 @@ const ImageFeedEditorScreen: React.FC = () => {
     return () => {
       mounted = false;
     };
-  }, [editingFeedId, route.params?.initialContent]);
+  }, [editingFeedId]);
 
   const handleFocusSuggest = (field: 'address' | 'friend') => {
     if (blurTimeoutRef.current) {
@@ -189,43 +398,29 @@ const ImageFeedEditorScreen: React.FC = () => {
         mediaType: 'photo',
         selectionLimit: 0,
         includeBase64: false,
+        assetRepresentationMode: 'compatible',
       });
       if (result.didCancel || !result.assets?.length) return;
-      const urls = result.assets
-        .map((asset) => asset.uri)
-        .filter((uri): uri is string => !!uri);
-      if (!urls.length) return;
-
-      if (editingFeedId) {
-        const body = new FormData();
-        urls.forEach((uri, index) => {
-          const name = uri.split('/').pop() || `image-${Date.now()}-${index}.jpg`;
-          const ext = name.split('.').pop()?.toLowerCase();
-          const type =
-            ext === 'png'
-              ? 'image/png'
-              : ext === 'webp'
-                ? 'image/webp'
-                : 'image/jpeg';
-          body.append('files', { uri, name, type } as unknown as Blob);
+      const invalidAsset = result.assets.find((asset) =>
+        getImageUploadValidationError(asset, {
+          label: '이미지',
+          allowedExtensions: MOBILE_IMAGE_UPLOAD_EXTENSIONS,
+        }),
+      );
+      if (invalidAsset) {
+        const message = getImageUploadValidationError(invalidAsset, {
+          label: '이미지',
+          allowedExtensions: MOBILE_IMAGE_UPLOAD_EXTENSIONS,
         });
-        const res = await addImageFeedImages(editingFeedId, body);
-        const imageBucket = FEED_IMAGE_BUCKET || '';
-        const joinUrl = (base?: string, path?: string | null) => {
-          if (!path) return '';
-          if (/^https?:\/\//i.test(path)) return path;
-          if (!base) return path;
-          const b = base.endsWith('/') ? base.slice(0, -1) : base;
-          const p = path.startsWith('/') ? path.slice(1) : path;
-          return `${b}/${p}`;
-        };
-        const newImages = Array.isArray(res?.images)
-          ? res.images.map((img: any) => joinUrl(imageBucket, img.fileName)).filter(Boolean)
-          : urls;
-        setForm((prev) => ({ ...prev, imageUrls: [...prev.imageUrls, ...newImages] }));
-      } else {
-        setForm((prev) => ({ ...prev, imageUrls: [...prev.imageUrls, ...urls] }));
+        Alert.alert('업로드할 수 없어요', message ?? '이미지 파일을 확인해 주세요.');
+        return;
       }
+      const nextItems = result.assets
+        .map((asset, index) => mapAssetToEditorImage(asset, index))
+        .filter((item): item is EditorImageItem => Boolean(item));
+      if (!nextItems.length) return;
+
+      setImageItems((prev) => [...prev, ...nextItems]);
     } catch {
       Alert.alert('실패', '이미지를 불러오지 못했어요.');
     } finally {
@@ -233,38 +428,202 @@ const ImageFeedEditorScreen: React.FC = () => {
     }
   };
 
+  const handleDeleteImage = (imageId: string) => {
+    setImageItems((prev) => {
+      const target = prev.find((item) => item.id === imageId);
+      if (!target) {
+        return prev;
+      }
+
+      if (target.isPersisted && typeof target.imageId === 'number') {
+        setRemovedPersistedImageIds((current) =>
+          current.includes(target.imageId!) ? current : [...current, target.imageId!],
+        );
+      }
+
+      return prev.filter((item) => item.id !== imageId);
+    });
+  };
+
+  const handleRotateImage = async (imageId: string) => {
+    const target = imageItems.find((item) => item.id === imageId);
+    if (!target) {
+      return;
+    }
+    if (target.isPersisted && !target.imageId) {
+      Alert.alert('잠시만요', '기존 이미지 정보를 불러오는 중이에요. 잠시 후 다시 시도해 주세요.');
+      return;
+    }
+
+    setRotatingImageId(imageId);
+    try {
+      const currentSize =
+        target.width && target.height
+          ? { width: target.width, height: target.height }
+          : await resolveImageSize(target.uri);
+      const resizeFormat = inferResizeFormat(target.mimeType, target.fileName);
+      const response = await ImageResizer.createResizedImage(
+        target.uri,
+        Math.max(1, Math.round(currentSize.height)),
+        Math.max(1, Math.round(currentSize.width)),
+        resizeFormat,
+        100,
+        90,
+        undefined,
+        false,
+      );
+
+      const nextMimeType =
+        resizeFormat === 'PNG'
+          ? 'image/png'
+          : resizeFormat === 'WEBP'
+            ? 'image/webp'
+            : 'image/jpeg';
+
+      setImageItems((prev) =>
+        prev.map((item) =>
+          item.id === imageId
+            ? {
+                ...item,
+                uri: response.uri,
+                width: response.width,
+                height: response.height,
+                fileName: response.name ?? item.fileName,
+                mimeType: nextMimeType,
+                uploadName: item.uploadName,
+                isPersisted: item.isPersisted,
+                isDirty: item.isPersisted ? true : item.isDirty,
+              }
+            : item,
+        ),
+      );
+    } catch {
+      Alert.alert('실패', '이미지를 회전하지 못했어요. 다른 이미지를 선택하거나 다시 시도해 주세요.');
+    } finally {
+      setRotatingImageId(null);
+    }
+  };
+
   const handleSubmit = async () => {
     if (!requireLogin({ message: '이미지 등록은 로그인 후 사용할 수 있어요.' })) return;
-    if (!form.content.trim() || !form.address.trim() || form.imageUrls.length === 0) {
+    if (!form.content.trim() || !form.address.trim() || imageItems.length === 0) {
       Alert.alert('필수 정보 확인', '내용, 주소, 최소 1장의 이미지가 필요합니다.');
+      return;
+    }
+    const invalidImage = imageItems.find((item) =>
+      (!item.isPersisted || item.isDirty) && getEditorImageValidationError(item),
+    );
+    if (invalidImage) {
+      Alert.alert(
+        '업로드할 수 없어요',
+        getEditorImageValidationError(invalidImage) ?? '이미지 파일을 확인해 주세요.',
+      );
       return;
     }
 
     setSaving(true);
     try {
+      const geocodeResult = await geocodeAddress(form.address);
+      if (!geocodeResult) {
+        Alert.alert('주소 확인 필요', '주소를 찾을 수 없습니다. 주소를 다시 확인해 주세요.');
+        return;
+      }
+
+      const finalStoreName = form.storeName?.trim() || form.address?.trim() || '';
+
       if (editingFeedId) {
-        await updateImageFeed(editingFeedId, form);
+        await updateImageFeed(editingFeedId, {
+          content: form.content,
+          address: geocodeResult.formattedAddress,
+          storeName: finalStoreName || form.storeName,
+          placeId: geocodeResult.placeId,
+          lat: geocodeResult.lat,
+          lng: geocodeResult.lng,
+          withFriends: form.withFriends,
+        });
+
+        const unresolvedReplacement = imageItems.some(
+          (item) => item.isPersisted && item.isDirty && !item.imageId,
+        );
+        if (unresolvedReplacement) {
+          throw new Error('기존 이미지 식별 정보를 아직 찾지 못했습니다.');
+        }
+
+        const replacementImages = imageItems.filter(
+          (item) => item.isPersisted && item.isDirty && typeof item.imageId === 'number',
+        );
+        for (const item of replacementImages) {
+          await replaceImageFeedImage(
+            editingFeedId,
+            item.imageId!,
+            buildImageUploadFile(item, item.imageId!),
+          );
+        }
+
+        const sortedRemovedImageIds = [...removedPersistedImageIds].sort((a, b) => b - a);
+        for (const imageId of sortedRemovedImageIds) {
+          await deleteImageFeedImage(editingFeedId, imageId);
+        }
+
+        const pendingImages = imageItems.filter((item) => !item.isPersisted);
+        if (pendingImages.length > 0) {
+          const body = new FormData();
+          pendingImages.forEach((item, index) => {
+            body.append(
+              'files',
+              buildImageUploadFile(item, index) as unknown as Blob,
+            );
+          });
+          await addImageFeedImages(editingFeedId, body);
+        }
       } else {
         const body = new FormData();
-        form.imageUrls.forEach((uri, index) => {
-          const name = uri.split('/').pop() || `image-${Date.now()}-${index}.jpg`;
-          const ext = name.split('.').pop()?.toLowerCase();
-          const type =
-            ext === 'png'
-              ? 'image/png'
-              : ext === 'webp'
-                ? 'image/webp'
-                : 'image/jpeg';
-          body.append('files', { uri, name, type } as unknown as Blob);
+        imageItems.forEach((item, index) => {
+          body.append(
+            'files',
+            buildImageUploadFile(item, index) as unknown as Blob,
+          );
         });
         body.append('content', form.content);
-        body.append('address', form.address);
-        if (form.storeName) body.append('storeName', form.storeName);
-        if (form.placeId) body.append('placeId', form.placeId);
+        body.append('address', geocodeResult.formattedAddress);
+        body.append('storeName', finalStoreName);
+        body.append('placeId', geocodeResult.placeId);
+        body.append('lat', String(geocodeResult.lat));
+        body.append('lng', String(geocodeResult.lng));
         if (form.withFriends) body.append('withFriends', form.withFriends);
         body.append('openYn', 'Y');
         body.append('useYn', 'Y');
-        await createImageFeed(body);
+        const createResult = await createImageFeed(body);
+        const friends = parseFriends(form.withFriends ?? '');
+        const storeId = resolveCreatedStoreId(createResult);
+        const tasks: Promise<unknown>[] = [
+          withTimeout(
+            createPlace({
+              placeId: geocodeResult.placeId,
+              address: geocodeResult.formattedAddress,
+              lat: geocodeResult.lat,
+              lng: geocodeResult.lng,
+            }),
+            8000,
+            'place',
+          ),
+        ];
+        if (friends.length > 0 && storeId) {
+          tasks.push(
+            withTimeout(
+              createFriendVisits({
+                storeId,
+                visitDate: todayDate(),
+                friends,
+                storeName: finalStoreName || undefined,
+                address: geocodeResult.formattedAddress,
+              }),
+              8000,
+              'friendVisits',
+            ),
+          );
+        }
+        await Promise.allSettled(tasks);
       }
       Alert.alert('완료', editingFeedId ? '이미지 피드를 수정했어요.' : '새 이미지 피드를 등록했어요.');
       navigation.goBack();
@@ -430,9 +789,21 @@ const ImageFeedEditorScreen: React.FC = () => {
           </View>
 
           <ImagePreview
-            images={form.imageUrls}
+            images={imageItems}
             isPicking={isPicking}
             onPress={handlePickImages}
+            onRotateCurrent={handleRotateImage}
+            onDeleteCurrent={(imageId) => {
+              Alert.alert('이미지 삭제', '현재 이미지를 목록에서 제거할까요?', [
+                { text: '취소', style: 'cancel' },
+                {
+                  text: '삭제',
+                  style: 'destructive',
+                  onPress: () => handleDeleteImage(imageId),
+                },
+              ]);
+            }}
+            rotatingImageId={rotatingImageId}
           />
 
           <FormField

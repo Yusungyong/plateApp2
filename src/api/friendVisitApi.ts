@@ -129,7 +129,7 @@ export const fetchUpcomingFriendVisits = async ({
   limit?: number;
 }): Promise<FriendUpcomingVisit[]> => {
   const res = await api.get(
-    '/api/friends/' + encodeURIComponent(username) + '/upcoming-visits',
+    '/api/friends/' + encodeURIComponent(username) + '/scheduled-visits',
     {
       params: { from, to, limit },
     },

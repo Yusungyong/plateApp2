@@ -282,7 +282,6 @@ const MyPostsScreen: React.FC = () => {
           navigation.navigate('VideoFeedScreen', {
             storeId: item.storeId,
             placeId: item.placeId,
-            username: user?.username,
             context: 'myPosts',
             contextItems: videoContextItems,
             contextIndex: index,

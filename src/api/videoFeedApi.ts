@@ -1,9 +1,6 @@
 // src/api/videoFeedApi.ts
 import api from './axiosInstance';
 import { getGuestParams } from './guestParams';
-import { createLogger } from '../utils/logger';
-
-const logger = createLogger('[videoFeedApi]');
 
 export interface VideoFeedItem {
   storeId: number;
@@ -22,6 +19,7 @@ export interface VideoFeedItem {
   profileImageUrl?: string | null;
 
   username?: string | null;
+  nickName?: string | null;
   createdAt?: string | null;
 
   // ✅ 좋아요 (백엔드 피드에서 내려오는 값)
@@ -30,37 +28,30 @@ export interface VideoFeedItem {
 }
 
 type FetchVideoFeedParams = {
-  username: string;
   placeId: string;
   storeId?: number;
+};
+
+export type VideoFeedSocialMeta = {
+  isLiked: boolean;
+  likeCount: number;
+  commentCount: number;
 };
 
 export const fetchVideoFeed = async (
   params: FetchVideoFeedParams,
 ): Promise<VideoFeedItem[]> => {
   const guestParams = await getGuestParams();
-  const requestParams = { ...params, ...guestParams };
-  logger.debug('fetchVideoFeed request', {
-    endpoint: '/api/home/feed',
-    params: requestParams,
-  });
+  const requestParams = {
+    placeId: params.placeId,
+    storeId: params.storeId,
+    ...guestParams,
+  };
   const response = await api.get<VideoFeedItem[]>('/api/home/feed', {
     params: requestParams,
   });
   const list = response.data ?? [];
-  const normalized = list.map(normalizeVideoFeedItem);
-  logger.debug(
-    'fetchVideoFeed response',
-    normalized.map(item => ({
-      storeId: item.storeId,
-      placeId: item.placeId,
-      fileName: item.fileName,
-      thumbnail: item.thumbnail,
-      createdAt: item.createdAt,
-      username: item.username,
-    })),
-  );
-  return normalized;
+  return list.map(normalizeVideoFeedItem);
 };
 
 const normalizeVideoFeedItem = (raw: any): VideoFeedItem => {
@@ -85,10 +76,29 @@ const normalizeVideoFeedItem = (raw: any): VideoFeedItem => {
       item.profile_image_url ??
       item.profileImage ??
       item.profile_image ??
+      item.authorProfileImageUrl ??
+      item.author_profile_image_url ??
       item.profileImagePath ??
       item.profile_image_path ??
       null,
-    username: item.username ?? null,
+    username:
+      item.username ??
+      item.userName ??
+      item.authorUsername ??
+      item.author_username ??
+      item.createdBy ??
+      item.created_by ??
+      null,
+    nickName:
+      item.nickName ??
+      item.nick_name ??
+      item.nickname ??
+      item.displayName ??
+      item.authorNickname ??
+      item.author_nickname ??
+      item.createdByNickname ??
+      item.created_by_nickname ??
+      null,
     likeCount:
       item.likeCount ??
       item.likesCount ??
@@ -105,12 +115,65 @@ const normalizeVideoFeedItem = (raw: any): VideoFeedItem => {
   };
 };
 
+const extractLikePayload = (payload: any) => {
+  if (payload?.data && typeof payload.data === 'object') {
+    return payload.data;
+  }
+  return payload ?? {};
+};
+
+const extractCommentTotalCount = (payload: any): number => {
+  const source = payload?.data ?? payload ?? {};
+  const directTotal = Number(
+    source?.totalElements ??
+      source?.totalCount ??
+      source?.count ??
+      source?.commentCount ??
+      source?.commentsCount,
+  );
+  if (Number.isFinite(directTotal)) {
+    return directTotal;
+  }
+  if (Array.isArray(source?.content)) {
+    return source.content.length;
+  }
+  if (Array.isArray(source?.items)) {
+    return source.items.length;
+  }
+  if (Array.isArray(source?.comments)) {
+    return source.comments.length;
+  }
+  if (Array.isArray(source)) {
+    return source.length;
+  }
+  return 0;
+};
+
+export const fetchVideoFeedSocialMeta = async (storeId: number): Promise<VideoFeedSocialMeta> => {
+  const [likeRes, commentRes] = await Promise.all([
+    api.get(`/api/stores/${storeId}/likes/status`),
+    api.get(`/api/stores/${storeId}/comments`, {
+      params: { page: 0, size: 1 },
+    }),
+  ]);
+
+  const likePayload = extractLikePayload(likeRes.data);
+
+  return {
+    isLiked: Boolean(likePayload?.liked ?? likePayload?.isLiked ?? false),
+    likeCount: Number(likePayload?.likeCount ?? 0),
+    commentCount: extractCommentTotalCount(commentRes.data),
+  };
+};
+
 export type VideoPostPayload = {
   title: string;
   storeName: string;
   placeId: string;
   videoUrl: string;
   address?: string;
+  lat?: number;
+  lng?: number;
   description?: string;
   withFriends?: string;
   muteYn?: 'Y' | 'N';

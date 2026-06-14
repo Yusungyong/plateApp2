@@ -4,7 +4,6 @@ import {
   View,
   Text,
   StyleSheet,
-  TouchableWithoutFeedback,
   ActivityIndicator,
   Image,
   Alert,
@@ -16,7 +15,13 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
-import Video, { OnLoadData, OnProgressData } from 'react-native-video';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import Video, {
+  BufferingStrategyType,
+  OnLoadData,
+  OnProgressData,
+} from 'react-native-video';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { VideoFeedItem } from '../../../api/videoFeedApi';
 import { useAuth } from '../../../auth/AuthProvider';
@@ -31,6 +36,7 @@ import { useRequireLogin } from '../../../hooks/useRequireLogin';
 import { reportContent } from '../../../api/reportApi';
 import { blockUser } from '../../../api/blockApi';
 import { buildVideoAssetUrl, buildVideoThumbnailUrl } from '../../../utils/videoAsset';
+import type { RootStackParamList } from '../../../navigation/MainNavigation';
 
 const decodeIfNeeded = (value?: string | null) => {
   if (!value) return undefined;
@@ -52,6 +58,8 @@ const decodeIfNeeded = (value?: string | null) => {
 type Props = {
   item: VideoFeedItem;
   isActive: boolean;
+  commentOpenSignal?: number;
+  onConsumeCommentOpen?: (() => void) | null;
 
   paused: boolean;
   buffering: boolean;
@@ -80,6 +88,8 @@ type Props = {
 const VideoReelItem: React.FC<Props> = ({
   item,
   isActive,
+  commentOpenSignal = 0,
+  onConsumeCommentOpen = null,
   paused,
   buffering,
   ready = false,
@@ -102,6 +112,7 @@ const VideoReelItem: React.FC<Props> = ({
   safeTopInset = 0,
   safeBottomInset = 0,
 }) => {
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const anyItem = item as any;
   const { user } = useAuth();
   const requireLogin = useRequireLogin();
@@ -111,8 +122,30 @@ const VideoReelItem: React.FC<Props> = ({
   const [commentVisible, setCommentVisible] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
   const [likesVisible, setLikesVisible] = useState(false);
+  const lastCommentOpenSignalRef = useRef(0);
   const [reportStep, setReportStep] = useState<'menu' | 'reasons' | 'other'>('menu');
   const [reportText, setReportText] = useState('');
+
+  useEffect(() => {
+    if (!isActive || !commentOpenSignal) {
+      return;
+    }
+    if (lastCommentOpenSignalRef.current === commentOpenSignal) {
+      return;
+    }
+    lastCommentOpenSignalRef.current = commentOpenSignal;
+    setCommentVisible(true);
+    onConsumeCommentOpen?.();
+  }, [commentOpenSignal, isActive, onConsumeCommentOpen]);
+
+  useEffect(() => {
+    if (isActive) {
+      return;
+    }
+    setCommentVisible(false);
+    setLikesVisible(false);
+    setMenuVisible(false);
+  }, [isActive]);
 
   // 좋아요 훅 사용 - storeId를 키로 사용하여 아이템별 상태 유지
   const initialIsLiked = useMemo(() => Boolean(anyItem.likedByMe), [anyItem.likedByMe]);
@@ -122,6 +155,14 @@ const VideoReelItem: React.FC<Props> = ({
     initialIsLiked,
     initialLikeCount,
   });
+  const [commentCount, setCommentCount] = useState<number | null>(
+    item.commentCount != null ? Number(item.commentCount) : null,
+  );
+
+  useEffect(() => {
+    setCommentCount(item.commentCount != null ? Number(item.commentCount) : null);
+  }, [item.commentCount, item.storeId]);
+  const hasResolvedLikeMeta = anyItem.likeCount != null || anyItem.likedByMe != null;
 
   const thumbnailUrl = useMemo(
     () => (item.thumbnail ? buildVideoThumbnailUrl(item.thumbnail, item.createdAt) : undefined),
@@ -152,10 +193,11 @@ const VideoReelItem: React.FC<Props> = ({
 
   const bufferConfig = useMemo(
     () => ({
-      minBufferMs: 1500,
-      maxBufferMs: 12000,
-      bufferForPlaybackMs: 500,
-      bufferForPlaybackAfterRebufferMs: 1000,
+      minBufferMs: 1000,
+      maxBufferMs: 10000,
+      bufferForPlaybackMs: 250,
+      bufferForPlaybackAfterRebufferMs: 500,
+      cacheSizeMB: 64,
     }),
     [],
   );
@@ -175,6 +217,10 @@ const VideoReelItem: React.FC<Props> = ({
     () => decodeIfNeeded(item.storeName) ?? item.storeName ?? '',
     [item.storeName],
   );
+  const normalizedTitle = useMemo(
+    () => decodeIfNeeded(item.title) ?? item.title ?? '',
+    [item.title],
+  );
   const normalizedAddress = useMemo(
     () => decodeIfNeeded(item.address) ?? item.address ?? '',
     [item.address],
@@ -187,12 +233,24 @@ const VideoReelItem: React.FC<Props> = ({
 
   const locationLabel = normalizedAddress.trim() || normalizedStoreName || '위치 정보 없음';
   const storeLabel = normalizedStoreName.trim();
+  const storyTitle = normalizedTitle.trim() || storeLabel || '영상 스토리';
+  const hasLocationInfo = Boolean(item.placeId?.trim() || normalizedStoreName.trim() || normalizedAddress.trim());
 
   const username = useMemo(() => {
     const u = item.username?.toString().trim();
-    return u && u.length > 0 ? u : 'plate_user';
+    return u && u.length > 0 ? u : '';
   }, [item.username]);
-
+  const nickName = useMemo(() => {
+    const nick = (item as any).nickName?.toString().trim();
+    return nick && nick.length > 0 ? nick : '';
+  }, [item]);
+  const creatorName = useMemo(() => {
+    if (nickName) {
+      return nickName;
+    }
+    return username ? `@${username}` : '';
+  }, [nickName, username]);
+  const hasCreator = creatorName.length > 0;
   const profileUri = useMemo(
     () => buildProfileUri(username, item.profileImageUrl),
     [item.profileImageUrl, username],
@@ -206,7 +264,7 @@ const VideoReelItem: React.FC<Props> = ({
 
   const [moreVisible, setMoreVisible] = useState(false);
   const moreAnim = useMemo(() => new Animated.Value(0), []);
-  const isOwner = Boolean(me && item.username === me);
+  const isOwner = Boolean(me && username === me);
 
   const openMore = useCallback(() => {
     if (!canDelete && isOwner) return;
@@ -236,7 +294,18 @@ const VideoReelItem: React.FC<Props> = ({
 
   const handleDeletePress = useCallback(() => {
     closeMore();
-    onDelete?.(item.storeId);
+    Alert.alert(
+      '영상을 삭제할까요?',
+      '삭제된 영상은 영구 삭제되며 다시 복구할 수 없어요.',
+      [
+        { text: '취소', style: 'cancel' },
+        {
+          text: '삭제',
+          style: 'destructive',
+          onPress: () => onDelete?.(item.storeId),
+        },
+      ],
+    );
   }, [closeMore, item.storeId, onDelete]);
 
   const handleReport = useCallback(
@@ -281,10 +350,25 @@ const VideoReelItem: React.FC<Props> = ({
     ]);
   }, [closeMore, item.username]);
 
+  const handleOpenMap = useCallback(() => {
+    const placeId = item.placeId?.trim() || undefined;
+    const storeName = normalizedStoreName.trim() || undefined;
+    const address = normalizedAddress.trim() || undefined;
+    if (!placeId && !storeName && !address) {
+      return;
+    }
+    navigation.navigate('FullScreenMap', {
+      placeId,
+      storeName,
+      address,
+    });
+  }, [item.placeId, navigation, normalizedAddress, normalizedStoreName]);
+
   const topOverlay = safeTopInset + 12;
-  const actionsBottom = safeBottomInset + 90;
-  const bottomInfoBottom = safeBottomInset + 20;
-  const bottomInfoHorizontal = 14;
+  const bottomInfoBottom = safeBottomInset + 18;
+  const actionsBottom = bottomInfoBottom;
+  const bottomInfoHorizontal = 16;
+  const bottomInfoRight = 84;
 
   const thumbnailOpacityAnim = useRef(new Animated.Value(thumbnailOpacity)).current;
 
@@ -317,8 +401,8 @@ const VideoReelItem: React.FC<Props> = ({
 
   return (
     <>
-      <TouchableWithoutFeedback onPress={onTogglePause}>
-        <View style={styles.container}>
+      <View style={styles.container}>
+        <View style={styles.touchLayer}>
           {shouldRenderVideo ? (
             <Video
               source={{ uri: resolvedVideoUri }}
@@ -331,8 +415,11 @@ const VideoReelItem: React.FC<Props> = ({
               volume={videoVolume}
               playInBackground={false}
               playWhenInactive={false}
+              automaticallyWaitsToMinimizeStalling={false}
+              preferredForwardBufferDuration={1}
+              bufferingStrategy={BufferingStrategyType.DEPENDING_ON_MEMORY}
               ignoreSilentSwitch="obey"
-              progressUpdateInterval={1000}
+              progressUpdateInterval={250}
               poster={bgUri}
               posterResizeMode={resizeMode}
               bufferConfig={bufferConfig}
@@ -352,12 +439,14 @@ const VideoReelItem: React.FC<Props> = ({
               resizeMode="cover"
             />
           ) : (
-            <View style={[styles.bg, { backgroundColor: 'black' }]} pointerEvents="none" />
+            <View style={[styles.bg, styles.bgFallback]} pointerEvents="none" />
           )}
 
+          <Pressable style={StyleSheet.absoluteFillObject} onPress={onTogglePause} />
+
           <VideoOverlayUI
-            likeCount={likeCount}
-            commentCount={item.commentCount ?? 0}
+            likeCount={hasResolvedLikeMeta ? likeCount : undefined}
+            commentCount={commentCount ?? undefined}
             liked={isLiked}
             showMore={canDelete || !isOwner}
             onPressMore={openMore}
@@ -375,25 +464,6 @@ const VideoReelItem: React.FC<Props> = ({
             onPressMenu={() => setMenuVisible(true)}
             bottomInset={actionsBottom}
           />
-
-          <View pointerEvents="none" style={[styles.topOverlay, { top: topOverlay }]}>
-            <View style={styles.chipStack}>
-              <View style={styles.chip}>
-                <Icon name="location-outline" size={14} color="#fff" />
-                <Text style={styles.chipText} numberOfLines={1} ellipsizeMode="tail">
-                  {locationLabel}
-                </Text>
-              </View>
-              {storeLabel ? (
-                <View style={[styles.chip, styles.chipSecondary]}>
-                  <Icon name="restaurant-outline" size={14} color="#fff" />
-                  <Text style={styles.chipText} numberOfLines={1} ellipsizeMode="tail">
-                    {storeLabel}
-                  </Text>
-                </View>
-              ) : null}
-            </View>
-          </View>
           <View
             pointerEvents="box-none"
             style={[
@@ -401,25 +471,52 @@ const VideoReelItem: React.FC<Props> = ({
               {
                 bottom: bottomInfoBottom,
                 left: bottomInfoHorizontal,
-                right: bottomInfoHorizontal,
+                right: bottomInfoRight,
               },
             ]}
           >
-            <TouchableOpacity
-              style={styles.creatorCard}
-              onPress={() => navigateToProfile(username)}
-              activeOpacity={0.8}
-            >
-              <View style={styles.avatarWrap}>
-                <Image source={{ uri: profileUri }} style={styles.avatar} />
-              </View>
-              <View style={styles.creatorText}>
-                <Text style={styles.username} numberOfLines={1}>
-                  @{username}
-                </Text>
-              </View>
-            </TouchableOpacity>
+            <View style={styles.storyCard}>
+              {hasCreator ? (
+                <TouchableOpacity
+                  style={styles.creatorRow}
+                  onPress={() => {
+                    if (!username) {
+                      return;
+                    }
+                    navigateToProfile(username);
+                  }}
+                  disabled={!username}
+                  activeOpacity={0.8}
+                >
+                  <View style={styles.avatarWrap}>
+                    <Image source={{ uri: profileUri }} style={styles.avatar} />
+                  </View>
+                  <View style={styles.creatorText}>
+                    <Text style={styles.username} numberOfLines={1}>
+                      {creatorName}
+                    </Text>
+                    <Text style={styles.creatorSubtext} numberOfLines={1}>
+                      {storeLabel || '플레이트'}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              ) : (
+                <View style={[styles.creatorRow, styles.creatorCardPlaceholder]}>
+                  <View style={styles.avatarWrap}>
+                    <Image source={{ uri: profileUri }} style={styles.avatar} />
+                  </View>
+                  <View style={styles.creatorText}>
+                    <Text style={styles.username} numberOfLines={1}>
+                      게시자 정보 없음
+                    </Text>
+                  </View>
+                </View>
+              )}
 
+              <Text style={styles.storyTitle} numberOfLines={2}>
+                {storyTitle}
+              </Text>
+            </View>
           </View>
 
           {showLoadingSpinner ? (
@@ -436,12 +533,32 @@ const VideoReelItem: React.FC<Props> = ({
               </View>
             </View>
           ) : null}
+
+          <View pointerEvents="box-none" style={[styles.topOverlay, { top: topOverlay }]}>
+            <View style={styles.topMetaRail}>
+              <TouchableOpacity
+                style={styles.chip}
+                activeOpacity={hasLocationInfo ? 0.82 : 1}
+                disabled={!hasLocationInfo}
+                onPress={handleOpenMap}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              >
+                <Icon name="location-outline" size={14} color="#fff" />
+                <Text style={styles.chipText} numberOfLines={1} ellipsizeMode="tail">
+                  {locationLabel}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
         </View>
-      </TouchableWithoutFeedback>
+      </View>
 
       <VideoCommentModal
         visible={commentVisible}
         storeId={item.storeId}
+        onCommentCountChange={(delta) => {
+          setCommentCount((prev) => Math.max(0, (prev ?? 0) + delta));
+        }}
         onClose={() => setCommentVisible(false)}
       />
       <VideoMenuModal
@@ -584,7 +701,9 @@ const VideoReelItem: React.FC<Props> = ({
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  touchLayer: { flex: 1 },
   bg: { ...StyleSheet.absoluteFillObject },
+  bgFallback: { backgroundColor: 'black' },
 
   topOverlay: {
     position: 'absolute',
@@ -592,10 +711,14 @@ const styles = StyleSheet.create({
     right: 0,
     paddingHorizontal: 14,
     alignItems: 'flex-end',
+    zIndex: 30,
+    elevation: 30,
   },
-  chipStack: {
-    alignItems: 'flex-end',
-    gap: 6,
+  topMetaRail: {
+    flexDirection: 'row',
+    maxWidth: '72%',
+    zIndex: 31,
+    elevation: 31,
   },
   chip: {
     flexDirection: 'row',
@@ -603,10 +726,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 999,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-  },
-  chipSecondary: {
-    alignSelf: 'flex-end',
+    backgroundColor: 'rgba(18,15,13,0.42)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+    zIndex: 32,
+    elevation: 32,
   },
   chipText: {
     color: '#fff',
@@ -617,15 +741,22 @@ const styles = StyleSheet.create({
 
   bottomInfo: {
     position: 'absolute',
-    alignItems: 'flex-end',
+    alignItems: 'stretch',
   },
 
-  creatorCard: {
+  storyCard: {
+    borderRadius: 28,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    backgroundColor: 'transparent',
+  },
+  creatorRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    alignSelf: 'flex-end',
-    paddingHorizontal: 8,
-    paddingVertical: 6,
+    alignSelf: 'flex-start',
+  },
+  creatorCardPlaceholder: {
+    opacity: 0.72,
   },
   avatarWrap: {
     width: 40,
@@ -640,12 +771,28 @@ const styles = StyleSheet.create({
   creatorText: { flex: 1, alignItems: 'flex-start' },
   username: {
     color: '#fff',
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '800',
     textAlign: 'left',
     textShadowColor: 'rgba(0,0,0,0.45)',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 6,
+  },
+  creatorSubtext: {
+    marginTop: 2,
+    color: '#dccfbe',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  storyTitle: {
+    marginTop: 14,
+    color: '#fff',
+    fontSize: 24,
+    lineHeight: 29,
+    fontWeight: '800',
+    textShadowColor: 'rgba(0,0,0,0.34)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 8,
   },
 
   centerOverlay: {

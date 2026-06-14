@@ -7,6 +7,7 @@ import React, {
 import {
   Platform,
   UIManager,
+  View,
   findNodeHandle,
   requireNativeComponent,
   type HostComponent,
@@ -41,6 +42,10 @@ type CalloutProps = ViewProps & {
   children?: ReactNode;
 };
 
+type PolylineProps = ViewProps & {
+  coordinates?: LatLng[];
+};
+
 type MapViewHandle = {
   animateToRegion: (region: Region, duration?: number) => void;
   animateCamera: (camera: unknown, duration?: number) => void;
@@ -60,17 +65,17 @@ type MapViewHandle = {
   setIndoorActiveLevelIndex: (activeLevelIndex: number) => void;
 };
 
-const NativeMapView = Platform.OS === 'android'
+const NativeMapView = (Platform.OS === 'android'
   ? (requireNativeComponent<MapViewProps>('AIRMap') as HostComponent<MapViewProps>)
-  : null;
-const NativeMarker = Platform.OS === 'android'
+  : View) as any;
+const NativeMarker = (Platform.OS === 'android'
   ? (require('../../../node_modules/react-native-maps/src/specs/NativeComponentMarker')
       .default as HostComponent<MarkerProps>)
-  : null;
-const NativeCallout = Platform.OS === 'android'
+  : View) as any;
+const NativeCallout = (Platform.OS === 'android'
   ? (require('../../../node_modules/react-native-maps/src/specs/NativeComponentCallout')
       .default as HostComponent<CalloutProps>)
-  : null;
+  : View) as any;
 
 const dispatchMapCommand = (
   nativeRef: React.RefObject<HostComponent<MapViewProps> | null>,
@@ -87,7 +92,6 @@ const dispatchMapCommand = (
 const AndroidMapView = forwardRef<MapViewHandle, MapViewProps>((props, ref) => {
   const nativeRef = useRef<HostComponent<MapViewProps> | null>(null);
   // Android compat view does not consume these props directly.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { provider: _provider, followsUserLocation: _followsUserLocation, ...rest } = props;
 
   useImperativeHandle(
@@ -149,21 +153,64 @@ const AndroidCallout = forwardRef<HostComponent<CalloutProps>, CalloutProps>(
 );
 AndroidCallout.displayName = 'AndroidCalloutCompat';
 
-const iOSModule = Platform.OS === 'android' ? null : require('../../../node_modules/react-native-maps');
+const StubMapView = forwardRef<MapViewHandle, MapViewProps>(({ children, ...rest }, ref) => {
+  useImperativeHandle(
+    ref,
+    () => ({
+      animateToRegion: () => {},
+      animateCamera: () => {},
+      setCamera: () => {},
+      fitToElements: () => {},
+      fitToSuppliedMarkers: () => {},
+      fitToCoordinates: () => {},
+      setMapBoundaries: () => {},
+      setIndoorActiveLevelIndex: () => {},
+    }),
+    [],
+  );
+
+  return <View {...rest}>{children}</View>;
+});
+StubMapView.displayName = 'StubMapViewCompat';
+
+const StubMarker = forwardRef<View, MarkerProps>(({ children, ...rest }, ref) => (
+  <View ref={ref} {...rest}>
+    {children}
+  </View>
+));
+StubMarker.displayName = 'StubMarkerCompat';
+
+const StubCallout = forwardRef<View, CalloutProps>(({ children, ...rest }, ref) => (
+  <View ref={ref} {...rest}>
+    {children}
+  </View>
+));
+StubCallout.displayName = 'StubCalloutCompat';
+
+const StubPolyline = forwardRef<View, PolylineProps>((props, ref) => <View ref={ref} {...props} />);
+StubPolyline.displayName = 'StubPolylineCompat';
 
 const exported = Platform.OS === 'android'
   ? {
       default: AndroidMapView,
       Callout: AndroidCallout,
       Marker: AndroidMarker,
+      Polyline: StubPolyline,
       PROVIDER_GOOGLE: 'google' as const,
     }
-  : iOSModule;
+  : {
+      default: StubMapView,
+      Callout: StubCallout,
+      Marker: StubMarker,
+      Polyline: StubPolyline,
+      PROVIDER_GOOGLE: 'google' as const,
+    };
 
 const DefaultMapView = exported.default;
 const Callout = exported.Callout;
 const Marker = exported.Marker;
+const Polyline = exported.Polyline;
 const PROVIDER_GOOGLE = exported.PROVIDER_GOOGLE;
 
-export { Callout, Marker, PROVIDER_GOOGLE };
+export { Callout, Marker, Polyline, PROVIDER_GOOGLE };
 export default DefaultMapView;

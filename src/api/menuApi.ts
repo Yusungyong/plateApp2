@@ -29,7 +29,7 @@ export const fetchStoreMenus = async ({
     return [];
   }
 
-  const response = await api.get<MenuItemResponse[]>('/api/menu', {
+  const response = await api.get<MenuItemResponse[]>('/api/menu/', {
     params: {
       placeId,
       storeName,

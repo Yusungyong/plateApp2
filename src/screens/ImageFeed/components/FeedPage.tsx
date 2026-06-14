@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, FlatList, Image, Text, TouchableOpacity, View, StyleSheet, Dimensions } from 'react-native';
 import { FEED_IMAGE_BUCKET } from '../../../config/buckets';
 import type { ImageFeedViewerResponse } from '../../../api/imageFeedApi';
+import ZoomableFeedImage from './ZoomableFeedImage';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const IMAGE_BASE_URL = FEED_IMAGE_BUCKET || '';
@@ -17,10 +18,9 @@ const joinUrl = (base?: string, path?: string) => {
 
 type Props = {
   pageFeedId: number;
+  pageData: ImageFeedViewerResponse | null;
   isActive: boolean;
   uiVisible: boolean;
-
-  getPageData: (id: number) => ImageFeedViewerResponse | null;
 
   onTap: () => void;
   onShowUi: () => void;
@@ -29,24 +29,75 @@ type Props = {
 
   getSavedImageIndex: (id: number) => number;
   setSavedImageIndex: (id: number, idx: number) => void;
+  onHorizontalGestureStart?: (() => void) | null;
+  onHorizontalGestureEnd?: (() => void) | null;
 };
 
 export default React.memo(function FeedPage({
   pageFeedId,
+  pageData,
   isActive,
   uiVisible,
-  getPageData,
   onTap,
   onShowUi,
   onActiveImageIndexChange,
   getSavedImageIndex,
   setSavedImageIndex,
+  onHorizontalGestureStart = null,
+  onHorizontalGestureEnd = null,
 }: Props) {
-  const pageData = getPageData(pageFeedId);
-  const images = pageData?.images ?? [];
+  const images = useMemo(() => pageData?.images ?? [], [pageData]);
+  const imageUris = useMemo(
+    () =>
+      images
+        .map((item) => joinUrl(IMAGE_BASE_URL, item.fileName))
+        .filter((uri): uri is string => Boolean(uri)),
+    [images],
+  );
 
   const hRef = useRef<FlatList<ImageFeedViewerResponse['images'][number]>>(null);
   const [hIndex, setHIndex] = useState(() => getSavedImageIndex(pageFeedId));
+  const isActiveRef = useRef(isActive);
+  const onShowUiRef = useRef(onShowUi);
+  const onActiveImageIndexChangeRef = useRef(onActiveImageIndexChange);
+  const onHorizontalGestureStartRef = useRef(onHorizontalGestureStart);
+  const onHorizontalGestureEndRef = useRef(onHorizontalGestureEnd);
+  const zoomActiveRef = useRef(false);
+  const [isZoomActive, setIsZoomActive] = useState(false);
+
+  useEffect(() => {
+    isActiveRef.current = isActive;
+  }, [isActive]);
+
+  useEffect(() => {
+    onShowUiRef.current = onShowUi;
+  }, [onShowUi]);
+
+  useEffect(() => {
+    onActiveImageIndexChangeRef.current = onActiveImageIndexChange;
+  }, [onActiveImageIndexChange]);
+
+  useEffect(() => {
+    onHorizontalGestureStartRef.current = onHorizontalGestureStart;
+    onHorizontalGestureEndRef.current = onHorizontalGestureEnd;
+  }, [onHorizontalGestureEnd, onHorizontalGestureStart]);
+
+  const handleZoomActiveChange = useCallback((active: boolean) => {
+    if (zoomActiveRef.current === active) {
+      return;
+    }
+    zoomActiveRef.current = active;
+    setIsZoomActive(active);
+    if (active) {
+      onHorizontalGestureStartRef.current?.();
+    } else {
+      onHorizontalGestureEndRef.current?.();
+    }
+  }, []);
+
+  useEffect(() => {
+    handleZoomActiveChange(false);
+  }, [hIndex, handleZoomActiveChange, isActive, pageFeedId]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -60,6 +111,19 @@ export default React.memo(function FeedPage({
     }, 0);
   }, [isActive, pageFeedId, getSavedImageIndex]);
 
+  useEffect(() => {
+    if (!imageUris.length) return;
+
+    const targetIndexes = isActive ? [hIndex, hIndex + 1, hIndex - 1] : [0];
+    const uris = targetIndexes
+      .map((index) => imageUris[index])
+      .filter((uri, index, list): uri is string => Boolean(uri) && list.indexOf(uri) === index);
+
+    uris.forEach((uri) => {
+      Image.prefetch(uri).catch(() => undefined);
+    });
+  }, [hIndex, imageUris, isActive]);
+
   const hGetItemLayout = useCallback(
     (_: any, i: number) => ({ length: SCREEN_WIDTH, offset: SCREEN_WIDTH * i, index: i }),
     [],
@@ -72,27 +136,36 @@ export default React.memo(function FeedPage({
     if (typeof v?.index === 'number') {
       setHIndex(v.index);
       setSavedImageIndex(pageFeedId, v.index);
-      if (isActive) onActiveImageIndexChange(v.index);
-      onShowUi();
+      if (isActiveRef.current) onActiveImageIndexChangeRef.current(v.index);
+      onShowUiRef.current();
     }
   }).current;
 
   const renderImage = useCallback(
-    ({ item }: { item: any }) => {
+    ({ item, index }: { item: ImageFeedViewerResponse['images'][number]; index: number }) => {
       const uri = joinUrl(IMAGE_BASE_URL, item.fileName);
       return (
-        <TouchableOpacity activeOpacity={1} onPress={onTap} style={styles.page}>
+        <View style={styles.page}>
           {uri ? (
-            <Image source={{ uri }} style={styles.image} resizeMode="contain" />
+            <ZoomableFeedImage
+              uri={uri}
+              style={styles.image}
+              resizeMode="contain"
+              placeholderText="이미지 없음"
+              imageProps={{ progressiveRenderingEnabled: true, fadeDuration: 0 }}
+              resetKey={`${pageFeedId}-${index}-${uri}`}
+              onTap={onTap}
+              onZoomActiveChange={index === hIndex ? handleZoomActiveChange : undefined}
+            />
           ) : (
             <View style={styles.center}>
               <Text style={styles.dim}>이미지 경로가 없어요</Text>
             </View>
           )}
-        </TouchableOpacity>
+        </View>
       );
     },
-    [onTap],
+    [hIndex, handleZoomActiveChange, onTap, pageFeedId],
   );
 
   const dots = useMemo(() => {
@@ -150,8 +223,11 @@ export default React.memo(function FeedPage({
         keyExtractor={(it, i) => `${pageFeedId}-${i}-${it.fileName}`}
         horizontal
         pagingEnabled
+        scrollEnabled={!isZoomActive}
+        directionalLockEnabled
         showsHorizontalScrollIndicator={false}
         renderItem={renderImage}
+        extraData={hIndex}
         getItemLayout={hGetItemLayout}
         initialNumToRender={1}
         windowSize={3}
@@ -160,6 +236,10 @@ export default React.memo(function FeedPage({
         removeClippedSubviews={true}
         viewabilityConfig={hViewabilityConfig}
         onViewableItemsChanged={onHViewableItemsChanged}
+        onScrollBeginDrag={onHorizontalGestureStart ?? undefined}
+        onScrollEndDrag={onHorizontalGestureEnd ?? undefined}
+        onMomentumScrollBegin={onHorizontalGestureStart ?? undefined}
+        onMomentumScrollEnd={onHorizontalGestureEnd ?? undefined}
       />
 
       {uiVisible && isActive && images.length > 1 && (

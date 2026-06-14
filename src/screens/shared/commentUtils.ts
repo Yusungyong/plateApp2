@@ -1,7 +1,36 @@
 // src/screens/shared/commentUtils.ts
+import { Dimensions, Platform } from 'react-native';
 import { formatTimeAgo } from '../../utils/dateTime';
 export const seedAvatar = (seed: string) =>
   `https://api.dicebear.com/8.x/identicon/png?seed=${encodeURIComponent(seed)}&size=64`;
+
+const normalizeLabel = (value: unknown) => String(value ?? '').trim();
+
+export const getPreferredUserDisplayName = (
+  source: {
+    nickName?: unknown;
+    nick_name?: unknown;
+    nickname?: unknown;
+    displayName?: unknown;
+    username?: unknown;
+    userName?: unknown;
+  } | null | undefined,
+  fallback = 'plate_user',
+) => {
+  const nickname = normalizeLabel(
+    source?.nickName ?? source?.nick_name ?? source?.nickname ?? source?.displayName,
+  );
+  if (nickname) {
+    return nickname;
+  }
+
+  const username = normalizeLabel(source?.username ?? source?.userName);
+  if (username) {
+    return `@${username}`;
+  }
+
+  return fallback;
+};
 
 export const toMs = (v: any) => {
   if (!v) return Date.now();
@@ -39,3 +68,29 @@ export const withTimeout = <T,>(promise: Promise<T>, ms: number) =>
         reject(error);
       });
   });
+
+export const getKeyboardOverlapInset = (
+  event: any,
+  safeAreaBottom = 0,
+) => {
+  const rawHeight = Number(event?.endCoordinates?.height ?? 0);
+  if (!Number.isFinite(rawHeight) || rawHeight <= 0) {
+    return 0;
+  }
+
+  if (Platform.OS === 'ios') {
+    return Math.max(0, rawHeight - safeAreaBottom);
+  }
+
+  const keyboardTopY = Number(event?.endCoordinates?.screenY);
+  const windowHeight = Dimensions.get('window').height;
+  if (Number.isFinite(keyboardTopY) && keyboardTopY > 0) {
+    const overlap = windowHeight - keyboardTopY;
+    if (overlap <= 0) {
+      return 0;
+    }
+    return Math.min(rawHeight, overlap);
+  }
+
+  return rawHeight;
+};

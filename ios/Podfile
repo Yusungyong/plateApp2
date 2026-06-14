@@ -5,6 +5,8 @@ require Pod::Executable.execute_command('node', ['-p',
     {paths: [process.argv[1]]},
   )', __dir__]).strip
 
+ENV['RCT_NEW_ARCH_ENABLED'] = '1'
+
 platform :ios, min_ios_version_supported
 prepare_react_native_project!
 
@@ -16,6 +18,7 @@ end
 
 target 'plateAppNew' do
   config = use_native_modules!
+  disable_ios_maps = false
 
   use_react_native!(
     :path => config[:reactNativePath],
@@ -27,9 +30,11 @@ target 'plateAppNew' do
   pod 'FirebaseCoreInternal', :modular_headers => true
   pod 'GoogleUtilities', :modular_headers => true
 
-  pod 'GoogleMaps'
-  pod 'Google-Maps-iOS-Utils'
-  pod 'react-native-maps', :path => '../node_modules/react-native-maps', :subspecs => ['Maps', 'Google']
+  unless disable_ios_maps
+    pod 'GoogleMaps'
+    pod 'Google-Maps-iOS-Utils'
+    pod 'react-native-maps', :path => '../node_modules/react-native-maps', :subspecs => ['Maps', 'Google']
+  end
 
   post_install do |installer|
     react_native_post_install(
@@ -38,5 +43,16 @@ target 'plateAppNew' do
       :mac_catalyst_enabled => false,
       # :ccache_enabled => true
     )
+
+    # Xcode 26.4 trips over fmt 11.0.2's consteval detection when RN is built from source.
+    fmt_base = File.join(installer.sandbox.pod_dir('fmt'), 'include', 'fmt', 'base.h')
+    if File.exist?(fmt_base)
+      content = File.read(fmt_base)
+      patched = content.gsub(/^#\s*define FMT_USE_CONSTEVAL 1$/, '#  define FMT_USE_CONSTEVAL 0')
+      if patched != content
+        File.chmod(0644, fmt_base)
+        File.write(fmt_base, patched)
+      end
+    end
   end
 end

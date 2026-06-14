@@ -1,6 +1,7 @@
 // src/screens/my/edit/ProfileImageEditScreen.tsx
 import React, { useState, useCallback, useMemo, useRef } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert, Image } from 'react-native';
+import { AxiosError } from 'axios';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { launchImageLibrary, Asset } from 'react-native-image-picker';
@@ -8,17 +9,46 @@ import { launchImageLibrary, Asset } from 'react-native-image-picker';
 import AppLayout from '../../../components/layout/AppLayout';
 import type { RootStackParamList } from '../../../navigation/MainNavigation';
 import { useAuth } from '../../../auth/AuthProvider';
-import { updateUserProfileImage } from '../../../api/userApi';
+import { uploadProfileImage } from '../../../api/profileApi';
 import { logProfileHistory } from '../../../utils/profileHistoryLogger';
-import { buildProfileUri } from '../../../utils/profileImage';
+import { buildProfileUri, markProfileImageUpdated } from '../../../utils/profileImage';
+import {
+  MOBILE_IMAGE_UPLOAD_EXTENSIONS,
+  getImageUploadValidationError,
+} from '../../../utils/uploadValidation';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 type Route = RouteProp<RootStackParamList, 'EditProfileImage'>;
 
+const getUploadErrorMessage = (error: unknown) => {
+  const axiosError = error as AxiosError<any>;
+  const responseBody = axiosError?.response?.data;
+  const message =
+    responseBody?.message ??
+    responseBody?.error ??
+    responseBody?.data?.message ??
+    (error as Error | undefined)?.message;
+
+  if (typeof message === 'string' && message.trim().length > 0) {
+    return message;
+  }
+  return '프로필 이미지를 저장하지 못했어요.';
+};
+
+const buildUploadFileName = (asset: Asset) => {
+  if (asset.fileName && asset.fileName.trim().length > 0) {
+    return asset.fileName;
+  }
+
+  const extensionFromType = asset.type?.split('/')[1]?.trim();
+  const safeExtension = extensionFromType ? extensionFromType.replace(/[^a-zA-Z0-9]/g, '') : 'jpg';
+  return `profile_${Date.now()}.${safeExtension || 'jpg'}`;
+};
+
 const ProfileImageEditScreen: React.FC = () => {
   const navigation = useNavigation<Nav>();
   const route = useRoute<Route>();
-  const { user } = useAuth();
+  const { user, patchUser, refreshUser } = useAuth();
 
   const initialImageRef = useRef(route.params?.initialValue ?? '');
   const [previewUri, setPreviewUri] = useState(initialImageRef.current);
@@ -40,9 +70,17 @@ const ProfileImageEditScreen: React.FC = () => {
         Alert.alert('선택 오류', '이미지를 다시 선택해 주세요.');
         return;
       }
+      const validationError = getImageUploadValidationError(asset, {
+        label: '프로필 이미지',
+        allowedExtensions: MOBILE_IMAGE_UPLOAD_EXTENSIONS,
+      });
+      if (validationError) {
+        Alert.alert('업로드할 수 없어요', validationError);
+        return;
+      }
       setSelectedAsset(asset);
       setPreviewUri(asset.uri);
-    } catch (e) {
+    } catch {
       Alert.alert('실패', '이미지를 불러오지 못했어요.');
     } finally {
       setPicking(false);
@@ -58,27 +96,47 @@ const ProfileImageEditScreen: React.FC = () => {
       Alert.alert('이미지 없음', '앨범에서 이미지를 선택해 주세요.');
       return;
     }
+    const validationError = getImageUploadValidationError(selectedAsset, {
+      label: '프로필 이미지',
+      allowedExtensions: MOBILE_IMAGE_UPLOAD_EXTENSIONS,
+    });
+    if (validationError) {
+      Alert.alert('업로드할 수 없어요', validationError);
+      return;
+    }
     try {
       setSaving(true);
-      const file = {
+      const fileName = buildUploadFileName(selectedAsset);
+      const mimeType = selectedAsset.type ?? 'image/jpeg';
+      const uploaded = await uploadProfileImage({
         uri: selectedAsset.uri,
-        name: selectedAsset.fileName ?? `profile_${Date.now()}.jpg`,
-        type: selectedAsset.type ?? 'image/jpeg',
-      };
-      await updateUserProfileImage(user.username, file);
+        name: fileName,
+        type: mimeType,
+      });
+      const nextProfileImageUrl = uploaded?.profileImageUrl ?? selectedAsset.uri;
+      markProfileImageUpdated(user.username, nextProfileImageUrl);
+      try {
+        await refreshUser();
+      } catch {
+        patchUser({ profileImageUrl: nextProfileImageUrl });
+      }
       await logProfileHistory(user.username, {
         changeType: 'PROFILE_IMAGE',
         before: { profileImageUrl: initialImageRef.current },
-        after: { profileImageUrl: selectedAsset.uri },
+        after: {
+          profileImageUrl: nextProfileImageUrl,
+          originalFileName: fileName,
+          mimeType,
+        },
         memo: 'ProfileImageEditScreen',
       });
       navigation.goBack();
     } catch (e) {
-      Alert.alert('실패', '프로필 이미지를 저장하지 못했어요.');
+      Alert.alert('실패', getUploadErrorMessage(e));
     } finally {
       setSaving(false);
     }
-  }, [navigation, selectedAsset, user?.username]);
+  }, [navigation, patchUser, refreshUser, selectedAsset, user?.username]);
 
   const previewSource = useMemo(() => {
     if (!previewUri) return undefined;

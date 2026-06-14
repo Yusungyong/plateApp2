@@ -7,7 +7,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import AppLayout from '../../../components/layout/AppLayout';
 import type { RootStackParamList } from '../../../navigation/MainNavigation';
 import { useAuth } from '../../../auth/AuthProvider';
-import { updateUserActiveRegion } from '../../../api/userApi';
+import { updateMyUserProfile } from '../../../api/userApi';
 import { logProfileHistory } from '../../../utils/profileHistoryLogger';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -16,7 +16,7 @@ type Route = RouteProp<RootStackParamList, 'EditRegion'>;
 const RegionEditScreen: React.FC = () => {
   const navigation = useNavigation<Nav>();
   const route = useRoute<Route>();
-  const { user } = useAuth();
+  const { user, patchUser, refreshUser } = useAuth();
   const initialRegionRef = useRef(route.params?.initialValue ?? user?.activeRegion ?? '');
   const [region, setRegion] = useState(initialRegionRef.current || '서울 · 광화문');
   const [saving, setSaving] = useState(false);
@@ -33,7 +33,12 @@ const RegionEditScreen: React.FC = () => {
         Alert.alert('활동 지역 확인', '활동 지역을 입력해 주세요.');
         return;
       }
-      await updateUserActiveRegion(user.username, trimmed);
+      await updateMyUserProfile({ activeRegion: trimmed });
+      try {
+        await refreshUser();
+      } catch {
+        patchUser({ activeRegion: trimmed });
+      }
       await logProfileHistory(user.username, {
         changeType: 'ACTIVE_REGION',
         before: { activeRegion: initialRegionRef.current },
@@ -41,7 +46,7 @@ const RegionEditScreen: React.FC = () => {
         memo: 'RegionEditScreen',
       });
       navigation.goBack();
-    } catch (e) {
+    } catch {
       Alert.alert('실패', '활동 지역을 저장하지 못했어요.');
     } finally {
       setSaving(false);

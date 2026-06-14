@@ -34,11 +34,6 @@ export type ToggleLikeResponse = {
   likeCount: number;
 };
 
-export type FeedCounts = {
-  commentCount: number;
-  likeCount: number;
-};
-
 // 댓글 목록
 export async function fetchFeedComments(feedId: number, page = 0, size = 20) {
   const res = await api.get(`/api/image-feeds/${feedId}/comments`, { params: { page, size } });
@@ -85,10 +80,4 @@ export async function deleteFeedReply(replyId: number) {
 export async function toggleFeedLike(feedId: number) {
   const res = await api.post(`/api/image-feeds/${feedId}/likes/toggle`);
   return (res.data?.data ?? res.data) as ToggleLikeResponse;
-}
-
-// (옵션) 카운트만 조회
-export async function fetchFeedCounts(feedId: number) {
-  const res = await api.get(`/api/image-feeds/${feedId}/counts`);
-  return (res.data?.data ?? res.data) as FeedCounts;
 }

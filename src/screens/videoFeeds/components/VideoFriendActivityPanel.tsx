@@ -49,12 +49,14 @@ const styles = StyleSheet.create({
   container: {
     position: 'absolute',
     left: 16,
-    right: 16,
-    bottom: 120,
+    right: 88,
+    bottom: 188,
   },
   card: {
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    borderRadius: 24,
+    backgroundColor: 'rgba(20,16,13,0.52)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
     padding: 16,
   },
   header: {
@@ -80,23 +82,23 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   hint: {
-    color: '#cfd3dd',
+    color: '#d8d1c7',
     fontSize: 12,
   },
   row: {
-    marginBottom: 10,
+    marginBottom: 12,
   },
   friendName: {
     color: '#fff',
     fontWeight: '700',
   },
   memo: {
-    color: '#cdd2e3',
+    color: '#e5ddd2',
     fontSize: 12,
     marginTop: 2,
   },
   date: {
-    color: '#a6acc0',
+    color: '#b7aa99',
     fontSize: 11,
     marginTop: 2,
   },

@@ -3,11 +3,18 @@ import { View, Text, StyleSheet } from 'react-native';
 import { useTheme } from '../../../styles/theme';
 
 type Props = {
-  step: number;      // 0~3
+  step: number;
   subtitle: string;
+  title?: string;
+  totalSteps?: number;
 };
 
-const SignupHeader: React.FC<Props> = ({ step, subtitle }) => {
+const SignupHeader: React.FC<Props> = ({
+  step,
+  subtitle,
+  title = '회원가입',
+  totalSteps = 4,
+}) => {
   const { colors, spacing, typography } = useTheme();
   const styles = useMemo(
     () => createStyles({ colors, spacing, typography }),
@@ -15,11 +22,11 @@ const SignupHeader: React.FC<Props> = ({ step, subtitle }) => {
   );
   return (
     <View style={styles.header}>
-      <Text style={styles.titleText}>회원가입</Text>
+      <Text style={styles.titleText}>{title}</Text>
       <Text style={styles.subText}>{subtitle}</Text>
 
       <View style={styles.stepIndicatorRow}>
-        {[0, 1, 2, 3].map(i => {
+        {Array.from({ length: totalSteps }, (_, i) => i).map(i => {
           const active = i === step;
           return (
             <View

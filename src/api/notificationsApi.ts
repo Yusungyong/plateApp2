@@ -22,10 +22,12 @@ export type Notification = {
   targetId?: number | null;
   targetType?: string | null;
   isRead: boolean;
+  readAt?: string | null;
   createdAt: string;
   actorUserId?: number | null;
   actorUsername?: string | null;
   actorProfileImageUrl?: string | null;
+  data?: Record<string, unknown> | null;
 };
 
 type PaginationParams = {

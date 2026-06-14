@@ -7,7 +7,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import AppLayout from '../../../components/layout/AppLayout';
 import type { RootStackParamList } from '../../../navigation/MainNavigation';
 import { useAuth } from '../../../auth/AuthProvider';
-import { updateUserNickname } from '../../../api/userApi';
+import { updateMyUserProfile } from '../../../api/userApi';
 import { logProfileHistory } from '../../../utils/profileHistoryLogger';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -17,7 +17,7 @@ type Route = RouteProp<RootStackParamList, 'EditNickname'>;
 const NicknameEditScreen: React.FC = () => {
   const navigation = useNavigation<Nav>();
   const route = useRoute<Route>();
-  const { user } = useAuth();
+  const { user, patchUser, refreshUser } = useAuth();
   const initialNicknameRef = useRef(route.params?.initialValue ?? user?.nickName ?? user?.username ?? '');
   const [nickname, setNickname] = useState(initialNicknameRef.current);
   const [saving, setSaving] = useState(false);
@@ -35,7 +35,12 @@ const NicknameEditScreen: React.FC = () => {
         Alert.alert('닉네임 확인', '닉네임은 2~20자 사이로 입력해 주세요.');
         return;
       }
-      await updateUserNickname(user.username, trimmed);
+      await updateMyUserProfile({ nickName: trimmed });
+      try {
+        await refreshUser();
+      } catch {
+        patchUser({ nickName: trimmed, nickname: trimmed, displayName: trimmed });
+      }
       await logProfileHistory(user.username, {
         changeType: 'NICKNAME',
         before: { nickName: initialNicknameRef.current },
@@ -43,7 +48,7 @@ const NicknameEditScreen: React.FC = () => {
         memo: 'NicknameEditScreen',
       });
       navigation.goBack();
-    } catch (e) {
+    } catch {
       Alert.alert('실패', '닉네임을 저장하지 못했어요.');
     } finally {
       setSaving(false);

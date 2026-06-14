@@ -26,6 +26,9 @@ export type UserLikedVideo = {
   placeId: string;
   storeName: string | null;
   address: string | null;
+  category?: string | null;
+  lat?: number | null;
+  lng?: number | null;
   likedAt: string;
 };
 
@@ -35,6 +38,10 @@ export type UserLikedImage = {
   thumbnail: string | null;
   placeId: string;
   storeName: string | null;
+  address?: string | null;
+  category?: string | null;
+  lat?: number | null;
+  lng?: number | null;
   likedAt: string;
 };
 

@@ -102,6 +102,21 @@ export type PublicProfileResponse = {
 
 export type MyProfileSummaryResponse = PublicProfileResponse;
 
+export type MyUserUpdatePayload = {
+  email?: string;
+  phone?: string;
+  nickName?: string;
+  activeRegion?: string;
+  isPrivate?: boolean;
+  fcmToken?: string;
+};
+
+export type PushTokenRegisterPayload = {
+  deviceId: string;
+  fcmToken: string;
+  platform: 'android' | 'ios';
+};
+
 const unwrapApi = <T,>(payload: any): T => {
   if (!payload) return payload as T;
   if (typeof payload === 'object' && 'data' in payload) {
@@ -179,15 +194,55 @@ export const fetchMyActivitySummary = async (): Promise<ActivitySummaryResponse>
   return request;
 };
 
+const buildMyUserUpdatePayload = (payload: MyUserUpdatePayload) => {
+  const body: Record<string, unknown> = {};
+
+  if (payload.email !== undefined) {
+    body.email = payload.email;
+  }
+  if (payload.phone !== undefined) {
+    body.phoneNumber = payload.phone;
+  }
+  if (payload.nickName !== undefined) {
+    body.nickname = payload.nickName;
+  }
+  if (payload.activeRegion !== undefined) {
+    body.activeRegion = payload.activeRegion;
+  }
+  if (payload.isPrivate !== undefined) {
+    body.isPrivate = payload.isPrivate;
+  }
+  if (payload.fcmToken !== undefined) {
+    body.fcmToken = payload.fcmToken;
+  }
+
+  return body;
+};
+
+export const updateMyUserProfile = async (
+  payload: MyUserUpdatePayload,
+): Promise<UserDetailResponse> => {
+  const { data } = await api.put<UserDetailResponse>(
+    '/api/users/me',
+    buildMyUserUpdatePayload(payload),
+  );
+  return unwrapApi<UserDetailResponse>(data);
+};
+
+export const registerMyPushToken = async (
+  payload: PushTokenRegisterPayload,
+): Promise<void> => {
+  await api.post('/api/users/me/push-token', payload);
+};
+
 export const updateProfileBasic = async (
-  username: string,
   payload: { nickName?: string; activeRegion?: string },
 ) => {
-  await api.patch(`/api/users/${encodeURIComponent(username)}/profile-basic`, payload);
+  await updateMyUserProfile(payload);
 };
 
 const buildUserPath = (username: string, path: string) =>
-  `/api/users/${encodeURIComponent(username)}/${path}`;
+  `/api/users/detail/${encodeURIComponent(username)}/${path}`;
 
 export const updateUserEmail = async (username: string, email: string) => {
   await api.patch(buildUserPath(username, 'email'), { email });

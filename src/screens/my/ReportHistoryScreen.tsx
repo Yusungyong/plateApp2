@@ -56,7 +56,7 @@ const ReportHistoryScreen: React.FC = () => {
       setLoading(true);
       const res = await fetchReportHistory({ limit: 50, offset: 0 });
       setItems(res.items ?? []);
-    } catch (e) {
+    } catch {
       setItems([]);
       setError('신고 내역을 불러오지 못했어요.');
     } finally {
@@ -70,7 +70,7 @@ const ReportHistoryScreen: React.FC = () => {
       const res = await fetchReportHistory({ limit: 50, offset: 0 });
       setItems(res.items ?? []);
       setError(null);
-    } catch (e) {
+    } catch {
       setError('신고 내역을 불러오지 못했어요.');
     } finally {
       setRefreshing(false);
@@ -96,7 +96,6 @@ const ReportHistoryScreen: React.FC = () => {
         navigation.navigate('VideoFeedScreen', {
           storeId: item.targetId,
           placeId: item.placeId,
-          username: user?.username ?? '',
         });
         return;
       }
@@ -106,7 +105,7 @@ const ReportHistoryScreen: React.FC = () => {
       }
       Alert.alert('지원하지 않아요', '영상/이미지 신고만 이동할 수 있어요.');
     },
-    [navigation, user?.username],
+    [navigation],
   );
 
   return (

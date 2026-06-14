@@ -4,17 +4,19 @@ import { getGuestParams } from './guestParams';
 import { FEED_IMAGE_BUCKET } from '../config/buckets';
 import { proxifyRemoteUrl } from '../config/devProxy';
 
-type HomeSortType = 'RECENT' | 'NEARBY';
+export type HomeImageSortType = 'RECENT' | 'NEARBY';
 type HomeLocation = { latitude: number; longitude: number };
 
 export type HomeImageThumbnail = {
   feedNo: number;
   thumbFileName: string; // 서버에서 images 첫 번째 파일명
+  title?: string | null;
   storeName?: string | null;
   placeId?: string | null;
   imageCount?: number | null;
   address?: string | null;
   createdAt?: string | null;
+  updatedAt?: string | null;
 };
 
 type ApiResponse<T> = {
@@ -41,16 +43,47 @@ const joinUrl = (base: string, path: string) => {
 const isHttpUrl = (value?: string | null) =>
   typeof value === 'string' && /^https?:\/\//i.test(value);
 
+const normalizeFeedImagePath = (value: string) => {
+  if (value.startsWith('/FeedImages/')) {
+    return value.slice('/FeedImages/'.length);
+  }
+  if (value.startsWith('FeedImages/')) {
+    return value.slice('FeedImages/'.length);
+  }
+  return value.startsWith('/') ? value.slice(1) : value;
+};
+
 export function buildFeedImageUrl(fileName?: string | null) {
   if (!fileName) return '';
-  if (isHttpUrl(fileName)) return proxifyRemoteUrl(fileName) ?? fileName;
+  if (isHttpUrl(fileName)) {
+    if (!FEED_IMAGE_BUCKET_FALLBACK) {
+      return proxifyRemoteUrl(fileName) ?? fileName;
+    }
+
+    try {
+      const parsed = new URL(fileName) as any;
+      const bucketUrl = new URL(FEED_IMAGE_BUCKET_FALLBACK) as any;
+      const bucketPath = bucketUrl.pathname.replace(/\/+$/, '');
+      const filePath = parsed.pathname.replace(/\/+$/, '');
+      const normalizedPath =
+        bucketPath && bucketPath !== '/' && filePath.startsWith(`${bucketPath}/`)
+          ? filePath
+          : `${bucketPath}/${normalizeFeedImagePath(filePath)}`.replace(/\/{2,}/g, '/');
+
+      const rewritten = `${bucketUrl.protocol}//${bucketUrl.host}${normalizedPath}${parsed.search}`;
+      return proxifyRemoteUrl(rewritten) ?? rewritten;
+    } catch {
+      return proxifyRemoteUrl(fileName) ?? fileName;
+    }
+  }
   if (!FEED_IMAGE_BUCKET_FALLBACK) return fileName; // base 없으면 디버깅용으로 파일명 그대로
-  return proxifyRemoteUrl(joinUrl(FEED_IMAGE_BUCKET_FALLBACK, fileName)) ?? fileName;
+  const rewritten = joinUrl(FEED_IMAGE_BUCKET_FALLBACK, normalizeFeedImagePath(fileName));
+  return proxifyRemoteUrl(rewritten) ?? rewritten;
 }
 
 export async function fetchHomeImageThumbnails(
   size = 4,
-  options?: { sortType?: HomeSortType; location?: HomeLocation | null; radius?: number },
+  options?: { sortType?: HomeImageSortType; location?: HomeLocation | null; radius?: number },
 ) {
   const params: Record<string, any> = { size };
   if (options?.sortType) {
@@ -86,10 +119,12 @@ const normalizeHomeImageThumbnail = (raw: any): HomeImageThumbnail => {
       item.thumbnailUrl ??
       item.thumbnail_url ??
       '',
+    title: item.title ?? item.feedTitle ?? item.feed_title ?? null,
     storeName: item.storeName ?? item.store_name ?? null,
     placeId: item.placeId ?? item.place_id ?? null,
     imageCount: item.imageCount ?? item.image_count ?? item.imagesCount ?? null,
     address: item.address ?? item.roadAddress ?? item.road_address ?? null,
     createdAt: item.createdAt ?? item.created_at ?? null,
+    updatedAt: item.updatedAt ?? item.updated_at ?? null,
   };
 };

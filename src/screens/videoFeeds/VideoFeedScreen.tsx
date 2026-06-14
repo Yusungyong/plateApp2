@@ -12,11 +12,14 @@ import {
   type ViewToken,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/Ionicons';
-import { VIDEO_BUCKET } from '../../config/buckets';
 import { useIsFocused } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { VideoFeedItem, deleteVideoPost } from '../../api/videoFeedApi';
+import {
+  VideoFeedItem,
+  deleteVideoPost,
+  fetchVideoFeedSocialMeta,
+} from '../../api/videoFeedApi';
 import { useAuth } from '../../auth/AuthProvider';
 import { getDeviceInfo } from '../../auth/deviceInfo';
 import VideoReelItem from './components/VideoReelItem';
@@ -30,22 +33,20 @@ import {
   updateWatchProgress,
   completeWatchSession,
 } from '../../api/videoWatchApi';
-import { createLogger } from '../../utils/logger';
 import { buildVideoAssetUrl, buildVideoThumbnailUrl } from '../../utils/videoAsset';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
-const FILE_BASE_URL = VIDEO_BUCKET;
 const PROGRESS_INTERVAL_MS = 10000;
 const PROGRESS_MIN_GAP_MS = 8000;
 const PROGRESS_MIN_DELTA_SEC = 2;
-const DISABLE_TRANSITION_REQUESTS = true;
-const DEBUG_VIDEO_TRANSITION = true;
-const logger = createLogger('[VideoFeedScreen]');
+
+const buildCommentTargetKey = (storeId: number, placeId: string) =>
+  `${storeId}:${placeId}`;
 
 type VideoFeedScreenRouteParams = {
-  username?: string;
   storeId: number;
   placeId: string;
+  openComments?: boolean;
   context?: 'myPosts';
   contextItems?: VideoFeedItem[];
   contextIndex?: number;
@@ -71,22 +72,45 @@ const VideoFeedScreen: React.FC<Props> = ({ route, navigation }) => {
   const insets = useSafeAreaInsets();
 
   const { storeId: initialStoreId, placeId: initialPlaceId } = route.params;
-  const username = route.params.username ?? user?.username ?? '';
+  const initialOpenComments = route.params.openComments === true;
+  const authRequestKey = user?.username ?? 'guest';
   const contextItems = route.params.contextItems;
   const contextIndex = route.params.contextIndex;
   const limitToContext = route.params.context === 'myPosts';
 
   const listRef = useRef<FlatList<VideoFeedItem> | null>(null);
   const [reloadCount, setReloadCount] = useState(0);
-  const [activeIndex, setActiveIndex] = useState(0);
+  const resolvedRouteStartIndex = useMemo(() => {
+    if (!contextItems?.length) {
+      return 0;
+    }
+    if (typeof contextIndex === 'number' && Number.isFinite(contextIndex)) {
+      return Math.max(0, Math.min(contextIndex, contextItems.length - 1));
+    }
+    const foundIndex = contextItems.findIndex(
+      item => item.storeId === initialStoreId && item.placeId === initialPlaceId,
+    );
+    return foundIndex >= 0 ? foundIndex : 0;
+  }, [contextIndex, contextItems, initialPlaceId, initialStoreId]);
+  const [activeIndex, setActiveIndex] = useState(resolvedRouteStartIndex);
   const activeIndexRef = useRef(0);
   const [pausedUser, setPausedUser] = useState(false);
   const [activeState, setActiveState] = useState<EnginePlayerState>(initialPlaybackState);
+  const [commentOpenRequest, setCommentOpenRequest] = useState<{
+    signal: number;
+    targetKey: string | null;
+  }>({
+    signal: 0,
+    targetKey: null,
+  });
   const transitionStartRef = useRef<{ index: number; storeId: number; at: number } | null>(null);
+  const initialCommentOpenedRef = useRef(false);
   const [friendActivity, setFriendActivity] = useState<StoreFriendActivityItem[]>([]);
   const [activityLoading, setActivityLoading] = useState(false);
   const lastFriendStoreIdRef = useRef<number | null>(null);
   const lastFriendRequestAtRef = useRef(0);
+  const socialMetaLoadingRef = useRef(new Set<number>());
+  const allowHydrateRealignRef = useRef(false);
 
   const progressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastSavedRef = useRef(new Map<number, { lastAt: number; lastPos: number }>());
@@ -127,16 +151,23 @@ const VideoFeedScreen: React.FC<Props> = ({ route, navigation }) => {
     maybeTriggerLoadMore,
     setVideos,
   } = useVideoFeedData({
-    username,
     initialStoreId,
     initialPlaceId,
     seedItems: contextItems,
     seedIndex: contextIndex,
     disableLoadMore: limitToContext,
+    onHydrated: ({ startIndex }) => {
+      if (!allowHydrateRealignRef.current) {
+        return;
+      }
+      allowHydrateRealignRef.current = false;
+      pendingHydratedIndexRef.current = startIndex;
+      setActiveIndex(startIndex);
+      setActiveState(initialPlaybackState);
+    },
   });
 
   useEffect(() => {
-    if (DISABLE_TRANSITION_REQUESTS) return;
     maybeTriggerLoadMore(activeIndex);
   }, [activeIndex, maybeTriggerLoadMore]);
 
@@ -152,41 +183,37 @@ const VideoFeedScreen: React.FC<Props> = ({ route, navigation }) => {
   }, []);
 
   useEffect(() => {
-    const activeItem = videos[activeIndex];
-    if (!activeItem) {
-      logger.warn('active video missing', {
-        activeIndex,
-        videoCount: videos.length,
-        username,
-        initialStoreId,
-        initialPlaceId,
-      });
+    if (videos.length === 0) {
       return;
     }
+    if (activeIndex < videos.length) {
+      return;
+    }
+    const nextIndex = Math.max(0, videos.length - 1);
+    setActiveIndex(nextIndex);
+    setActiveState(initialPlaybackState);
+  }, [activeIndex, videos.length]);
 
-    logger.debug('active video resolved', {
-      activeIndex,
-      videoCount: videos.length,
-      username,
-      storeId: activeItem.storeId,
-      placeId: activeItem.placeId,
-      fileName: activeItem.fileName,
-      thumbnail: activeItem.thumbnail,
-      createdAt: activeItem.createdAt,
-      requestEndpoint: '/api/home/feed',
-      videoBucket: FILE_BASE_URL,
-      resolvedVideoUri: getVideoUriOf(activeItem),
-      resolvedPosterUri: getPosterOf(activeItem),
-    });
-  }, [
-    activeIndex,
-    getPosterOf,
-    getVideoUriOf,
-    initialPlaceId,
-    initialStoreId,
-    username,
-    videos,
-  ]);
+  useEffect(() => {
+    if (!initialOpenComments || initialCommentOpenedRef.current) {
+      return;
+    }
+    const activeItem = videos[activeIndex];
+    if (!activeItem) {
+      return;
+    }
+    if (
+      activeItem.storeId !== initialStoreId ||
+      activeItem.placeId !== initialPlaceId
+    ) {
+      return;
+    }
+    initialCommentOpenedRef.current = true;
+    setCommentOpenRequest(prev => ({
+      signal: prev.signal + 1,
+      targetKey: buildCommentTargetKey(activeItem.storeId, activeItem.placeId),
+    }));
+  }, [activeIndex, initialOpenComments, initialPlaceId, initialStoreId, videos]);
 
   const prefetchPoster = useCallback(
     (it?: VideoFeedItem) => {
@@ -242,11 +269,12 @@ const VideoFeedScreen: React.FC<Props> = ({ route, navigation }) => {
 
   const pendingInitialScrollRef = useRef(false);
   const pendingInitialIndexRef = useRef(0);
+  const pendingHydratedIndexRef = useRef<number | null>(null);
   const lastInitKeyRef = useRef<string | null>(null);
 
   const initKey = useMemo(
-    () => `${username}_${initialStoreId}_${initialPlaceId}`,
-    [username, initialStoreId, initialPlaceId],
+    () => `${authRequestKey}_${initialStoreId}_${initialPlaceId}`,
+    [authRequestKey, initialStoreId, initialPlaceId],
   );
   const effectKey = `${initKey}_${reloadCount}`;
 
@@ -254,8 +282,12 @@ const VideoFeedScreen: React.FC<Props> = ({ route, navigation }) => {
     if (lastInitKeyRef.current === effectKey) return;
     lastInitKeyRef.current = effectKey;
 
-    pendingInitialScrollRef.current = false;
-    pendingInitialIndexRef.current = 0;
+    allowHydrateRealignRef.current = Boolean(contextItems?.length);
+    pendingInitialScrollRef.current = Boolean(contextItems?.length);
+    pendingInitialIndexRef.current = resolvedRouteStartIndex;
+    pendingHydratedIndexRef.current = null;
+    setActiveIndex(resolvedRouteStartIndex);
+    setActiveState(initialPlaybackState);
 
     let mounted = true;
     (async () => {
@@ -271,9 +303,24 @@ const VideoFeedScreen: React.FC<Props> = ({ route, navigation }) => {
     return () => {
       mounted = false;
     };
-  }, [effectKey, loadInitial]);
+  }, [contextItems?.length, effectKey, loadInitial, resolvedRouteStartIndex]);
+
+  const handleUserScrollBegin = useCallback(() => {
+    allowHydrateRealignRef.current = false;
+    pendingHydratedIndexRef.current = null;
+  }, []);
 
   const onContentSizeChange = useCallback(() => {
+    if (pendingHydratedIndexRef.current != null && videosRef.current.length > 0) {
+      const idx = Math.min(
+        pendingHydratedIndexRef.current,
+        Math.max(0, videosRef.current.length - 1),
+      );
+      pendingHydratedIndexRef.current = null;
+      safeScrollToIndex(idx);
+      return;
+    }
+
     if (!pendingInitialScrollRef.current) return;
     if (videosRef.current.length === 0) return;
 
@@ -294,6 +341,12 @@ const VideoFeedScreen: React.FC<Props> = ({ route, navigation }) => {
   const headerButtonSize = 40;
   const headerBottomPad = 8;
   const errorTop = headerTopPad + headerButtonSize + headerBottomPad;
+  const initialScrollIndex = useMemo(() => {
+    if (videos.length === 0) {
+      return 0;
+    }
+    return Math.min(resolvedRouteStartIndex, Math.max(0, videos.length - 1));
+  }, [resolvedRouteStartIndex, videos.length]);
 
   const renderItem = useCallback(
     ({ item, index }: { item: VideoFeedItem; index: number }) => {
@@ -304,16 +357,28 @@ const VideoFeedScreen: React.FC<Props> = ({ route, navigation }) => {
       const isOwner = Boolean(user?.username && item.username === user.username);
       const posterUri = getPosterOf(item);
       const videoUri = getVideoUriOf(item);
-      const thumbnailOpacity =
-        isActive && state.ready && !state.buffering && (activeState.time ?? 0) > 0.35 ? 0 : 1;
+      const thumbnailOpacity = isActive && state.ready && !state.buffering ? 0 : 1;
       const isPaused = !isFocused || pausedUser || !isActive;
       const shouldPreload = Math.abs(index - activeIndex) === 1;
+      const itemCommentTargetKey = buildCommentTargetKey(item.storeId, item.placeId);
+      const shouldOpenCommentsForItem =
+        isActive && commentOpenRequest.targetKey === itemCommentTargetKey;
 
       return (
         <View style={{ height: SCREEN_HEIGHT }}>
           <VideoReelItem
             item={item}
             isActive={isActive}
+            commentOpenSignal={shouldOpenCommentsForItem ? commentOpenRequest.signal : 0}
+            onConsumeCommentOpen={
+              shouldOpenCommentsForItem
+                ? () =>
+                    setCommentOpenRequest(prev => ({
+                      ...prev,
+                      targetKey: null,
+                    }))
+                : undefined
+            }
             paused={isPaused}
             preload={shouldPreload}
             videoUri={videoUri}
@@ -326,15 +391,11 @@ const VideoFeedScreen: React.FC<Props> = ({ route, navigation }) => {
             onTogglePause={() => setPausedUser(p => !p)}
             onLoadStart={() => {
               if (!isActive) return;
-              if (DEBUG_VIDEO_TRANSITION) {
-                }
               transitionStartRef.current = { index, storeId: item.storeId, at: Date.now() };
               setActiveState(prev => ({ ...prev, buffering: true, error: null }));
             }}
             onLoad={(meta) => {
               if (!isActive) return;
-              if (DEBUG_VIDEO_TRANSITION) {
-                }
               const width = Number(meta.naturalSize?.width ?? 0);
               const height = Number(meta.naturalSize?.height ?? 0);
               const orientation = meta.naturalSize?.orientation as
@@ -361,29 +422,14 @@ const VideoFeedScreen: React.FC<Props> = ({ route, navigation }) => {
             }}
             onBuffer={(meta) => {
               if (!isActive) return;
-              if (DEBUG_VIDEO_TRANSITION) {
-                }
               setActiveState(prev => ({ ...prev, buffering: meta.isBuffering }));
             }}
             onReadyForDisplay={() => {
               if (!isActive) return;
               setActiveState(prev => ({ ...prev, ready: true, buffering: false, error: null }));
             }}
-            onError={(error) => {
+            onError={() => {
               if (!isActive) return;
-              if (DEBUG_VIDEO_TRANSITION) {
-                }
-              logger.warn('video playback failed', {
-                activeIndex: index,
-                storeId: item.storeId,
-                placeId: item.placeId,
-                fileName: item.fileName,
-                thumbnail: item.thumbnail,
-                createdAt: item.createdAt,
-                resolvedVideoUri: videoUri,
-                resolvedPosterUri: posterUri,
-                error,
-              });
               setActiveState(prev => ({
                 ...prev,
                 buffering: false,
@@ -436,6 +482,7 @@ const VideoFeedScreen: React.FC<Props> = ({ route, navigation }) => {
       insets.bottom,
       insets.top,
       isFocused,
+      commentOpenRequest,
       navigation,
       pausedUser,
       safeScrollToIndex,
@@ -450,7 +497,6 @@ const VideoFeedScreen: React.FC<Props> = ({ route, navigation }) => {
 
   const loadFriendActivity = useCallback(
     async (storeId: number | undefined) => {
-      if (DISABLE_TRANSITION_REQUESTS) return;
       if (!user?.username || !storeId) {
         setFriendActivity([]);
         return;
@@ -486,6 +532,43 @@ const VideoFeedScreen: React.FC<Props> = ({ route, navigation }) => {
     prefetchPoster(videos[activeIndex - 1]);
   }, [activeIndex, loadFriendActivity, prefetchPoster, videos]);
 
+  useEffect(() => {
+    const current = videos[activeIndex];
+    if (!user?.username || !current?.storeId) {
+      return;
+    }
+
+    const needsSocialMeta =
+      current.likeCount == null || current.commentCount == null || current.likedByMe == null;
+    if (!needsSocialMeta) {
+      return;
+    }
+    if (socialMetaLoadingRef.current.has(current.storeId)) {
+      return;
+    }
+
+    socialMetaLoadingRef.current.add(current.storeId);
+    fetchVideoFeedSocialMeta(current.storeId)
+      .then((meta) => {
+        setVideos((prev) =>
+          prev.map((video) =>
+            video.storeId !== current.storeId
+              ? video
+              : {
+                  ...video,
+                  likeCount: meta.likeCount,
+                  commentCount: meta.commentCount,
+                  likedByMe: meta.isLiked,
+                },
+          ),
+        );
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        socialMetaLoadingRef.current.delete(current.storeId);
+      });
+  }, [activeIndex, setVideos, user?.username, videos]);
+
   const activeItem = videos[activeIndex];
   const activeStoreId = activeItem?.storeId;
   const activeTime = activeState.time || 0;
@@ -520,7 +603,7 @@ const VideoFeedScreen: React.FC<Props> = ({ route, navigation }) => {
 
   const ensureSessionForStore = useCallback(
     async (storeId: number, timeSec: number, durationSec: number) => {
-      if (DISABLE_TRANSITION_REQUESTS) return null;
+      if (!user?.username) return null;
       if (sessionByStoreRef.current.has(storeId)) {
         return sessionByStoreRef.current.get(storeId) ?? null;
       }
@@ -546,12 +629,12 @@ const VideoFeedScreen: React.FC<Props> = ({ route, navigation }) => {
       }
       return null;
     },
-    [getVideoQuality],
+    [getVideoQuality, user?.username],
   );
 
   const updateProgressForStore = useCallback(
     async (storeId: number, timeSec: number, durationSec: number, force = false) => {
-      if (DISABLE_TRANSITION_REQUESTS) return;
+      if (!user?.username) return;
       if (storeId == null) return;
       const sessionId =
         sessionByStoreRef.current.get(storeId) ??
@@ -582,7 +665,7 @@ const VideoFeedScreen: React.FC<Props> = ({ route, navigation }) => {
         });
       } catch {}
     },
-    [ensureSessionForStore, getVideoQuality],
+    [ensureSessionForStore, getVideoQuality, user?.username],
   );
 
   useEffect(() => {
@@ -604,7 +687,7 @@ const VideoFeedScreen: React.FC<Props> = ({ route, navigation }) => {
   }, [activeStoreId, updateProgressForStore]);
 
   useEffect(() => {
-    if (DISABLE_TRANSITION_REQUESTS) return;
+    if (!user?.username) return;
     if (!activeStoreId && activeStoreId !== 0) {
       clearProgressTimer();
       return;
@@ -642,10 +725,11 @@ const VideoFeedScreen: React.FC<Props> = ({ route, navigation }) => {
     isFocused,
     pausedUser,
     updateProgressForStore,
+    user?.username,
   ]);
 
   useEffect(() => {
-    if (DISABLE_TRANSITION_REQUESTS) return;
+    if (!user?.username) return;
     if (!activeStoreId && activeStoreId !== 0) return;
     if (!activeDuration || activeDuration <= 0) return;
     if (completedByStoreRef.current.has(activeStoreId)) return;
@@ -669,7 +753,7 @@ const VideoFeedScreen: React.FC<Props> = ({ route, navigation }) => {
       });
     };
     completeSession().catch(() => {});
-  }, [activeDuration, activeStoreId, activeTime, ensureSessionForStore]);
+  }, [activeDuration, activeStoreId, activeTime, ensureSessionForStore, user?.username]);
 
   if (loading && videos.length === 0) {
     return (
@@ -693,6 +777,7 @@ const VideoFeedScreen: React.FC<Props> = ({ route, navigation }) => {
   return (
     <View style={styles.root}>
       <FlatList
+        key={effectKey}
         ref={ref => {
           listRef.current = ref;
         }}
@@ -700,6 +785,7 @@ const VideoFeedScreen: React.FC<Props> = ({ route, navigation }) => {
         keyExtractor={keyExtractor}
         renderItem={renderItem as any}
         getItemLayout={getItemLayout}
+        initialScrollIndex={initialScrollIndex}
         pagingEnabled
         snapToInterval={SCREEN_HEIGHT}
         snapToAlignment="start"
@@ -707,6 +793,8 @@ const VideoFeedScreen: React.FC<Props> = ({ route, navigation }) => {
         showsVerticalScrollIndicator={false}
         onContentSizeChange={onContentSizeChange}
         onScrollToIndexFailed={onScrollToIndexFailed}
+        onScrollBeginDrag={handleUserScrollBegin}
+        onMomentumScrollBegin={handleUserScrollBegin}
         viewabilityConfig={viewabilityConfig}
         onViewableItemsChanged={onViewableItemsChanged}
         removeClippedSubviews={true}
@@ -716,7 +804,10 @@ const VideoFeedScreen: React.FC<Props> = ({ route, navigation }) => {
         scrollEventThrottle={16}
       />
 
-      <View style={[styles.header, { paddingTop: headerTopPad, paddingBottom: headerBottomPad }]}>
+      <View
+        pointerEvents="box-none"
+        style={[styles.header, { paddingTop: headerTopPad, paddingBottom: headerBottomPad }]}
+      >
         <TouchableOpacity
           onPress={handleBack}
           style={styles.backButton}
@@ -751,7 +842,7 @@ const VideoFeedScreen: React.FC<Props> = ({ route, navigation }) => {
 };
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: 'black' },
+  root: { flex: 1, backgroundColor: '#090806' },
 
   header: {
     position: 'absolute',
@@ -760,6 +851,9 @@ const styles = StyleSheet.create({
     right: 0,
     zIndex: 30,
     paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     backgroundColor: 'transparent',
   },
   backButton: {
@@ -768,12 +862,14 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.35)',
+    backgroundColor: 'rgba(14,11,9,0.38)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
   },
 
   loadingContainer: {
     flex: 1,
-    backgroundColor: 'black',
+    backgroundColor: '#090806',
     alignItems: 'center',
     justifyContent: 'center',
   },

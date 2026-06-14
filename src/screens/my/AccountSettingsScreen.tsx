@@ -58,7 +58,7 @@ const AccountSettingsScreen: React.FC = () => {
 
   useFocusEffect(
     useCallback(() => {
-      void loadProfile();
+      loadProfile().catch(() => undefined);
     }, [loadProfile]),
   );
 
@@ -69,7 +69,7 @@ const AccountSettingsScreen: React.FC = () => {
         text: '로그아웃',
         style: 'destructive',
         onPress: () => {
-          void logout();
+          logout().catch(() => undefined);
         },
       },
     ]);
@@ -150,9 +150,6 @@ const AccountSettingsScreen: React.FC = () => {
         </View>
 
         <ProfileSectionCard style={styles.heroCard}>
-          <View style={styles.heroGlowLarge} />
-          <View style={styles.heroGlowSmall} />
-
           <Text style={styles.heroTitle}>현재 계정 상태</Text>
           <Text style={styles.heroSubtitle}>
             {profile?.email ?? '이메일 미등록'} · 가입일 {formatDate(profile?.createdAt) || '-'}
@@ -274,6 +271,27 @@ const AccountSettingsScreen: React.FC = () => {
 
         <ProfileSectionCard style={styles.sectionCard}>
           <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>알림</Text>
+            <Text style={styles.sectionHint}>푸시 권한과 토큰 동기화 상태를 점검합니다.</Text>
+          </View>
+          <SettingsRow
+            icon="notifications-outline"
+            title="푸시 진단"
+            description="권한, APNs, FCM 토큰, 서버 동기화 상태 확인"
+            value={
+              profile?.settings.pushNotifications == null
+                ? undefined
+                : profile.settings.pushNotifications
+                  ? '켜짐'
+                  : '꺼짐'
+            }
+            onPress={() => navigation.navigate('EditFcmToken', { initialValue: user?.fcmToken ?? '' })}
+            isLast
+          />
+        </ProfileSectionCard>
+
+        <ProfileSectionCard style={styles.sectionCard}>
+          <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>세션</Text>
             <Text style={styles.sectionHint}>현재 기기의 로그인 상태를 정리합니다.</Text>
           </View>
@@ -311,7 +329,7 @@ const AccountSettingsScreen: React.FC = () => {
               </Text>
             </View>
             <View style={styles.dangerIconWrap}>
-              <Ionicons name="trash-outline" size={18} color="#c43737" />
+              <Ionicons name="trash-outline" size={18} color={colors.textPrimary} />
             </View>
           </View>
 
@@ -321,7 +339,7 @@ const AccountSettingsScreen: React.FC = () => {
             onPress={() => navigation.navigate('DeleteAccount')}
           >
             <Text style={styles.dangerButtonText}>회원 탈퇴 진행</Text>
-            <Ionicons name="chevron-forward" size={16} color="#c43737" />
+            <Ionicons name="chevron-forward" size={16} color={colors.textPrimary} />
           </TouchableOpacity>
         </ProfileSectionCard>
       </ScrollView>
@@ -335,11 +353,11 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) =>
   StyleSheet.create({
     scroll: {
       flex: 1,
-      backgroundColor: colors.backgroundSoft,
+      backgroundColor: colors.background,
     },
     scrollContent: {
       paddingHorizontal: 20,
-      paddingTop: 18,
+      paddingTop: 16,
     },
     pageIntro: {
       marginBottom: 16,
@@ -349,7 +367,7 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) =>
       fontSize: 11,
       fontWeight: '800',
       letterSpacing: 1.3,
-      color: colors.brandPrimary,
+      color: colors.textSecondary,
     },
     pageTitle: {
       marginTop: 8,
@@ -365,58 +383,47 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) =>
       color: colors.textSecondary,
     },
     heroCard: {
-      padding: 20,
+      paddingHorizontal: 18,
+      paddingVertical: 18,
       marginBottom: 16,
-      position: 'relative',
-    },
-    heroGlowLarge: {
-      position: 'absolute',
-      top: -30,
-      right: -18,
-      width: 124,
-      height: 124,
-      borderRadius: 62,
-      backgroundColor: `${colors.brandPrimary}16`,
-    },
-    heroGlowSmall: {
-      position: 'absolute',
-      bottom: -14,
-      left: -10,
-      width: 84,
-      height: 84,
-      borderRadius: 42,
-      backgroundColor: `${colors.brandPrimary}10`,
+      backgroundColor: colors.background,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.borderDefault,
+      shadowColor: 'rgba(15, 23, 42, 0.06)',
+      shadowOpacity: 1,
+      shadowRadius: 12,
+      shadowOffset: { width: 0, height: 4 },
+      elevation: 1,
     },
     heroTitle: {
-      fontSize: 22,
-      fontWeight: '900',
+      fontSize: 21,
+      fontWeight: '800',
       color: colors.textPrimary,
-      zIndex: 1,
     },
     heroSubtitle: {
       marginTop: 8,
       fontSize: 13,
       lineHeight: 20,
       color: colors.textSecondary,
-      zIndex: 1,
     },
     heroChipRow: {
       flexDirection: 'row',
       flexWrap: 'wrap',
-      marginTop: 16,
-      zIndex: 1,
+      marginTop: 14,
     },
     heroChip: {
-      paddingHorizontal: 12,
-      paddingVertical: 8,
+      paddingHorizontal: 10,
+      paddingVertical: 6,
       borderRadius: 999,
-      backgroundColor: colors.backgroundSoft,
+      backgroundColor: colors.background,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.borderDefault,
       marginRight: 8,
       marginBottom: 8,
     },
     heroChipText: {
-      fontSize: 12,
-      fontWeight: '700',
+      fontSize: 11,
+      fontWeight: '600',
       color: colors.textSecondary,
     },
     statusGrid: {
@@ -424,15 +431,16 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) =>
       flexWrap: 'wrap',
       justifyContent: 'space-between',
       marginTop: 8,
-      zIndex: 1,
     },
     statusTile: {
       width: '48.3%',
-      borderRadius: 18,
+      borderRadius: 14,
       paddingHorizontal: 14,
       paddingVertical: 14,
       marginBottom: 12,
-      backgroundColor: colors.backgroundSoft,
+      backgroundColor: colors.background,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.borderDefault,
     },
     statusLabel: {
       fontSize: 12,
@@ -448,7 +456,6 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) =>
       flexDirection: 'row',
       alignItems: 'center',
       marginTop: 4,
-      zIndex: 1,
     },
     inlineLoadingText: {
       marginLeft: 8,
@@ -457,25 +464,26 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) =>
     },
     errorBanner: {
       marginTop: 8,
-      borderRadius: 16,
+      borderRadius: 14,
       paddingHorizontal: 14,
       paddingVertical: 12,
-      backgroundColor: '#fff5f4',
+      backgroundColor: colors.background,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.borderDefault,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      zIndex: 1,
     },
     errorBannerText: {
       flex: 1,
       marginRight: 12,
       fontSize: 12,
-      color: '#8f2f2c',
+      color: colors.textSecondary,
     },
     errorBannerAction: {
       fontSize: 12,
       fontWeight: '700',
-      color: '#c43737',
+      color: colors.textPrimary,
     },
     sectionCard: {
       padding: 20,
@@ -501,9 +509,9 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) =>
     },
     contactTile: {
       width: '48.4%',
-      borderRadius: 22,
+      borderRadius: 16,
       padding: 16,
-      backgroundColor: colors.backgroundSoft,
+      backgroundColor: colors.background,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: colors.borderDefault,
     },
@@ -532,13 +540,14 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) =>
       marginTop: 12,
       fontSize: 12,
       fontWeight: '700',
-      color: colors.brandPrimary,
+      color: colors.textPrimary,
     },
     dangerCard: {
       padding: 20,
       marginBottom: 8,
-      backgroundColor: '#fff8f7',
-      borderColor: '#ffd9d4',
+      backgroundColor: colors.background,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.borderDefault,
     },
     dangerHeader: {
       flexDirection: 'row',
@@ -548,14 +557,14 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) =>
     dangerTitle: {
       fontSize: 18,
       fontWeight: '900',
-      color: '#8f2f2c',
+      color: colors.textPrimary,
     },
     dangerDescription: {
       marginTop: 8,
       maxWidth: 250,
       fontSize: 12,
       lineHeight: 18,
-      color: '#8f2f2c',
+      color: colors.textSecondary,
     },
     dangerIconWrap: {
       width: 38,
@@ -563,14 +572,18 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) =>
       borderRadius: 14,
       alignItems: 'center',
       justifyContent: 'center',
-      backgroundColor: '#fff1ef',
+      backgroundColor: colors.background,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.borderDefault,
     },
     dangerButton: {
       marginTop: 18,
-      borderRadius: 18,
+      borderRadius: 14,
       paddingHorizontal: 16,
       paddingVertical: 14,
-      backgroundColor: '#fff1ef',
+      backgroundColor: colors.background,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.borderDefault,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
@@ -578,6 +591,6 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) =>
     dangerButtonText: {
       fontSize: 14,
       fontWeight: '800',
-      color: '#c43737',
+      color: colors.textPrimary,
     },
   });

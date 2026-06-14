@@ -59,7 +59,7 @@ const MyPageScreen: React.FC = () => {
 
   useFocusEffect(
     useCallback(() => {
-      void loadProfile();
+      loadProfile().catch(() => {});
     }, [loadProfile]),
   );
 
@@ -218,9 +218,6 @@ const MyPageScreen: React.FC = () => {
         ) : (
           <>
             <ProfileSectionCard style={styles.heroCard}>
-              <View style={styles.heroGlowLarge} />
-              <View style={styles.heroGlowSmall} />
-
               <View style={styles.heroTopRow}>
                 <Image source={profileImageSource} style={styles.avatarImage} />
 
@@ -316,11 +313,11 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) =>
   StyleSheet.create({
     scroll: {
       flex: 1,
-      backgroundColor: colors.backgroundSoft,
+      backgroundColor: colors.background,
     },
     scrollContent: {
       paddingHorizontal: 20,
-      paddingTop: 18,
+      paddingTop: 16,
     },
     centerBox: {
       marginTop: 120,
@@ -348,53 +345,41 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) =>
       fontWeight: '700',
     },
     heroCard: {
-      padding: 20,
+      paddingHorizontal: 18,
+      paddingVertical: 18,
       marginBottom: 16,
       backgroundColor: colors.background,
-      position: 'relative',
-    },
-    heroGlowLarge: {
-      position: 'absolute',
-      top: -28,
-      right: -18,
-      width: 120,
-      height: 120,
-      borderRadius: 60,
-      backgroundColor: colors.backgroundSoft,
-    },
-    heroGlowSmall: {
-      position: 'absolute',
-      bottom: -14,
-      left: -10,
-      width: 86,
-      height: 86,
-      borderRadius: 43,
-      backgroundColor: colors.backgroundSoft,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.borderDefault,
+      shadowColor: 'rgba(15, 23, 42, 0.06)',
+      shadowOpacity: 1,
+      shadowRadius: 12,
+      shadowOffset: { width: 0, height: 4 },
+      elevation: 1,
     },
     heroTopRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      zIndex: 1,
     },
     avatarImage: {
-      width: 78,
-      height: 78,
-      borderRadius: 30,
+      width: 74,
+      height: 74,
+      borderRadius: 24,
       backgroundColor: colors.backgroundSoft,
-      borderWidth: 3,
-      borderColor: colors.background,
+      borderWidth: 1,
+      borderColor: colors.borderDefault,
     },
     heroBody: {
       flex: 1,
-      marginLeft: 14,
+      marginLeft: 12,
     },
     heroTitle: {
-      fontSize: 24,
-      fontWeight: '900',
+      fontSize: 22,
+      fontWeight: '800',
       color: colors.textPrimary,
     },
     heroSubtitle: {
-      marginTop: 5,
+      marginTop: 4,
       fontSize: 13,
       color: colors.textSecondary,
     },
@@ -404,42 +389,45 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) =>
       marginTop: 12,
     },
     heroChip: {
-      paddingHorizontal: 12,
-      paddingVertical: 8,
+      paddingHorizontal: 10,
+      paddingVertical: 6,
       borderRadius: 999,
-      backgroundColor: colors.backgroundSoft,
+      backgroundColor: colors.background,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.borderDefault,
       marginRight: 8,
       marginBottom: 8,
     },
     heroChipText: {
-      fontSize: 12,
-      fontWeight: '700',
+      fontSize: 11,
+      fontWeight: '600',
       color: colors.textSecondary,
     },
     metricStrip: {
       flexDirection: 'row',
       justifyContent: 'space-between',
-      marginTop: 18,
-      zIndex: 1,
+      marginTop: 16,
     },
     metricItem: {
       flex: 1,
-      borderRadius: 18,
-      paddingVertical: 16,
-      backgroundColor: colors.backgroundSoft,
+      borderRadius: 14,
+      paddingVertical: 14,
+      backgroundColor: colors.background,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.borderDefault,
       alignItems: 'center',
-      marginRight: 10,
+      marginRight: 8,
     },
     metricItemLast: {
       marginRight: 0,
     },
     metricValue: {
-      fontSize: 22,
-      fontWeight: '900',
+      fontSize: 20,
+      fontWeight: '800',
       color: colors.textPrimary,
     },
     metricLabel: {
-      marginTop: 6,
+      marginTop: 4,
       fontSize: 12,
       color: colors.textSecondary,
     },
@@ -447,15 +435,14 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) =>
       flexDirection: 'row',
       justifyContent: 'space-between',
       marginTop: 12,
-      zIndex: 1,
     },
     primaryAction: {
       width: '48.5%',
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
-      borderRadius: 18,
-      paddingVertical: 13,
+      borderRadius: 14,
+      paddingVertical: 12,
       backgroundColor: colors.textPrimary,
     },
     primaryActionText: {
@@ -469,9 +456,9 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) =>
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
-      borderRadius: 18,
-      paddingVertical: 13,
-      backgroundColor: colors.backgroundSoft,
+      borderRadius: 14,
+      paddingVertical: 12,
+      backgroundColor: colors.background,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: colors.borderDefault,
     },

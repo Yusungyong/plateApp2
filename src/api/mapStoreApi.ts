@@ -7,6 +7,7 @@ export type NearbyStoreMarker = {
   storeName: string | null;
   address: string | null;
   thumbnail: string | null;
+  category?: string | null;
   lat: number;
   lng: number;
   distanceM: number;

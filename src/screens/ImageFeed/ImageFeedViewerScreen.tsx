@@ -31,13 +31,20 @@ import type { FeedMetaUI } from './components/ViewerOverlays';
 import FeedCommentModal from './components/FeedCommentModal';
 import ImageLikesModal from './components/ImageLikesModal';
 
-import { toggleFeedLike, fetchFeedCounts } from '../../api/imageFeedSocialApi';
-import { deleteImageFeed } from '../../api/imageFeedApi';
+import { toggleFeedLike } from '../../api/imageFeedSocialApi';
+import { deleteImageFeed, fetchImageFeedViewer } from '../../api/imageFeedApi';
 import { useAuth } from '../../auth/AuthProvider';
 import { reportContent } from '../../api/reportApi';
 import { blockUser } from '../../api/blockApi';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
+const ALWAYS_VISIBLE = true;
+const EMPTY_FEED_META: FeedMetaUI = {
+  likeCount: 0,
+  commentCount: 0,
+  isLiked: false,
+};
+const NOOP = () => {};
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 type Route = { key: string; name: string; params: RootStackParamList['ImageFeedViewer'] };
@@ -51,6 +58,7 @@ export default function ImageFeedViewerScreen() {
     groupId,
     groupIds: contextGroupIds,
     initialIndex,
+    openComments = false,
   } = route.params;
   const { user } = useAuth();
 
@@ -77,23 +85,23 @@ export default function ImageFeedViewerScreen() {
     activeData,
     activeImageIndex,
     setActiveImageIndex,
-    tick,
-    getPageData,
+    pageDataById,
     getSavedImageIndex,
     setSavedImageIndex,
     onVerticalIndexChange,
     removeFeedId,
   } = feedViewer;
 
+  const [verticalScrollEnabled, setVerticalScrollEnabled] = useState(true);
+
   const {
     groupIds,
     groupIndex,
     activeGroupId,
     activeGroupData,
+    pageDataById: groupPageDataById,
     loadMoreImages,
   } = groupViewer;
-
-  const viewerTick = isGroupMode ? groupViewer.tick : tick;
 
   const listIds = isGroupMode ? groupIds : feedIds;
   const listIndex = isGroupMode ? groupIndex : feedIndex;
@@ -117,17 +125,16 @@ export default function ImageFeedViewerScreen() {
     }
   }).current;
 
-  const ALWAYS_VISIBLE = true;
-
   const renderVItem = useCallback(
     ({ item }: { item: number | string }) => {
       if (isGroupMode) {
+        const targetGroupId = String(item);
         return (
           <GroupFeedPage
-            pageGroupId={String(item)}
-            isActive={String(item) === activeGroupId}
+            pageGroupId={targetGroupId}
+            pageData={groupPageDataById.get(targetGroupId) ?? null}
+            isActive={targetGroupId === activeGroupId}
             uiVisible={ALWAYS_VISIBLE}
-            getPageData={groupViewer.getPageData}
             onActiveImageIndexChange={setActiveImageIndex}
             getSavedImageIndex={groupViewer.getSavedImageIndex}
             setSavedImageIndex={groupViewer.setSavedImageIndex}
@@ -136,29 +143,32 @@ export default function ImageFeedViewerScreen() {
         );
       }
 
+      const targetFeedId = Number(item);
       return (
         <FeedPage
-          pageFeedId={Number(item)}
-          isActive={Number(item) === activeFeedId}
+          pageFeedId={targetFeedId}
+          pageData={pageDataById.get(targetFeedId) ?? null}
+          isActive={targetFeedId === activeFeedId}
           uiVisible={ALWAYS_VISIBLE}
-          getPageData={getPageData}
-          onTap={() => {}}
-          onShowUi={() => {}}
+          onTap={NOOP}
+          onShowUi={NOOP}
           onActiveImageIndexChange={setActiveImageIndex}
           getSavedImageIndex={getSavedImageIndex}
           setSavedImageIndex={setSavedImageIndex}
+          onHorizontalGestureStart={() => setVerticalScrollEnabled(false)}
+          onHorizontalGestureEnd={() => setVerticalScrollEnabled(true)}
         />
       );
     },
     [
       activeFeedId,
       activeGroupId,
-      getPageData,
-      groupViewer.getPageData,
+      groupPageDataById,
       groupViewer.getSavedImageIndex,
       groupViewer.setSavedImageIndex,
       isGroupMode,
       loadMoreImages,
+      pageDataById,
       setActiveImageIndex,
       getSavedImageIndex,
       setSavedImageIndex,
@@ -168,6 +178,7 @@ export default function ImageFeedViewerScreen() {
   // ✅ 모달
   const [commentOpen, setCommentOpen] = useState(false);
   const [likesOpen, setLikesOpen] = useState(false);
+  const initialCommentOpenHandledRef = useRef(false);
   const [moreVisible, setMoreVisible] = useState(false);
   const [reportStep, setReportStep] = useState<'menu' | 'reasons' | 'other'>('menu');
   const [reportText, setReportText] = useState('');
@@ -182,10 +193,18 @@ export default function ImageFeedViewerScreen() {
     isLiked: false,
   });
 
+  useEffect(() => {
+    if (isGroupMode || !openComments || initialCommentOpenHandledRef.current || !activeFeedId) {
+      return;
+    }
+    initialCommentOpenHandledRef.current = true;
+    setCommentOpen(true);
+  }, [activeFeedId, isGroupMode, openComments]);
+
   // ✅ activeFeedId 바뀔 때: 서버 카운트로 초기화 + 캐시 반영
   useEffect(() => {
     if (isGroupMode) {
-      setMeta({ likeCount: 0, commentCount: 0, isLiked: false });
+      setMeta(EMPTY_FEED_META);
       return;
     }
     let mounted = true;
@@ -193,14 +212,6 @@ export default function ImageFeedViewerScreen() {
       const id = activeFeedId;
       if (!id) return;
 
-      // 1) 캐시 있으면 즉시 적용
-      const cached = metaByFeedId.current.get(id);
-      if (cached) {
-        setMeta(cached);
-        return;
-      }
-
-      // 2) viewer 응답에 count가 있으면 그걸로 1차 세팅(서버 변경 반영 전)
       const fromViewer: FeedMetaUI = {
         likeCount: Number(activeData?.likeCount ?? 0),
         commentCount: Number(activeData?.commentCount ?? 0),
@@ -211,28 +222,56 @@ export default function ImageFeedViewerScreen() {
             false,
         ),
       };
-      setMeta(fromViewer);
-      metaByFeedId.current.set(id, fromViewer);
 
-      // 3) (옵션) counts API가 있으면 한번 더 정확히 동기화
+      const cached = metaByFeedId.current.get(id);
+      const isPlaceholderCache =
+        Boolean(cached) &&
+        cached?.likeCount === 0 &&
+        cached?.commentCount === 0 &&
+        cached?.isLiked === false;
+      const hasViewerMeta = Boolean(activeData);
+
+      let initialMeta = cached ?? EMPTY_FEED_META;
+      if (hasViewerMeta && (!cached || isPlaceholderCache)) {
+        initialMeta = fromViewer;
+      }
+
+      setMeta(initialMeta);
+      if (cached || hasViewerMeta) {
+        metaByFeedId.current.set(id, initialMeta);
+      }
+
+      if (!user?.username) {
+        return;
+      }
+
       try {
-        const counts = await fetchFeedCounts(id);
+        const latest = await fetchImageFeedViewer(id);
         if (!mounted) return;
 
         setMeta((m) => {
-          const next = { ...m, likeCount: counts.likeCount, commentCount: counts.commentCount };
+          const base = metaByFeedId.current.get(id) ?? m;
+          const next = {
+            ...base,
+            likeCount: Number(latest.likeCount ?? base.likeCount),
+            commentCount: Number(latest.commentCount ?? base.commentCount),
+            isLiked:
+              typeof latest.likedByMe === 'boolean'
+                ? latest.likedByMe
+                : base.isLiked,
+          };
           metaByFeedId.current.set(id, next);
           return next;
         });
       } catch {
-        // counts 엔드포인트 없거나 실패해도 viewer 기반으로 유지
+        // detail 재조회가 실패해도 캐시/viewer 기반으로 유지
       }
     })();
 
     return () => {
       mounted = false;
     };
-  }, [activeFeedId, activeData, isGroupMode]);
+  }, [activeFeedId, activeData, isGroupMode, user?.username]);
 
   const onToggleLike = useCallback(async () => {
     if (isGroupMode) return;
@@ -291,6 +330,8 @@ export default function ImageFeedViewerScreen() {
       storeName: activeGroupData.group.storeName ?? null,
       location: activeGroupData.group.address ?? null,
       placeId: activeGroupData.group.placeId ?? null,
+      lat: activeGroupData.group.lat ?? null,
+      lng: activeGroupData.group.lng ?? null,
       thumbnail: activeGroupData.group.thumbnail ?? null,
       commentCount: 0,
       likeCount: 0,
@@ -317,6 +358,31 @@ export default function ImageFeedViewerScreen() {
     Boolean(user?.username) &&
     Boolean(activeData?.username) &&
     user?.username === activeData?.username;
+
+  const handleOpenLocationMap = useCallback(() => {
+    const overlayData = isGroupMode ? groupOverlayData : activeData;
+    const placeId = overlayData?.placeId?.trim() || undefined;
+    const storeName = overlayData?.storeName?.trim() || undefined;
+    const address = overlayData?.location?.trim() || undefined;
+    const lat =
+      typeof overlayData?.lat === 'number' && Number.isFinite(overlayData.lat)
+        ? overlayData.lat
+        : undefined;
+    const lng =
+      typeof overlayData?.lng === 'number' && Number.isFinite(overlayData.lng)
+        ? overlayData.lng
+        : undefined;
+    if (!placeId && !storeName && !address && (lat == null || lng == null)) {
+      return;
+    }
+    navigation.navigate('FullScreenMap', {
+      placeId,
+      storeName,
+      address,
+      lat,
+      lng,
+    });
+  }, [activeData, groupOverlayData, isGroupMode, navigation]);
 
   const handleMenu = () => {
     if (isGroupMode) return;
@@ -379,7 +445,7 @@ export default function ImageFeedViewerScreen() {
       if (feedIds.length <= 1) {
         navigation.goBack();
       }
-    } catch (error) {
+    } catch {
       Alert.alert('삭제 실패', '이미지 피드를 삭제하지 못했어요.');
     }
   }, [activeFeedId, closeMore, feedIds.length, isGroupMode, navigation, removeFeedId]);
@@ -399,7 +465,7 @@ export default function ImageFeedViewerScreen() {
         .then(() => {
           Alert.alert('접수 완료', '신고가 접수되었습니다.');
         })
-        .catch((error) => {
+        .catch(() => {
           Alert.alert('실패', '신고에 실패했어요. 잠시 후 다시 시도해 주세요.');
         });
     },
@@ -420,13 +486,13 @@ export default function ImageFeedViewerScreen() {
             .then(() => {
               Alert.alert('차단 완료', '해당 사용자를 차단했어요.');
             })
-            .catch((error) => {
+            .catch(() => {
               Alert.alert('실패', '차단에 실패했어요. 잠시 후 다시 시도해 주세요.');
             });
         },
       },
     ]);
-  }, [activeData?.username, closeMore]);
+  }, [activeData?.username, closeMore, isGroupMode]);
 
   if (listLoading) {
     return (
@@ -460,7 +526,6 @@ export default function ImageFeedViewerScreen() {
 
       <FlatList
         data={listIds}
-        extraData={viewerTick}
         keyExtractor={(id) => `feed-${id}`}
         pagingEnabled
         showsVerticalScrollIndicator={false}
@@ -471,6 +536,7 @@ export default function ImageFeedViewerScreen() {
         maxToRenderPerBatch={2}
         removeClippedSubviews={true}
         nestedScrollEnabled
+        scrollEnabled={verticalScrollEnabled}
         viewabilityConfig={vViewabilityConfig}
         onViewableItemsChanged={onVViewableItemsChanged}
         initialScrollIndex={listIndex}
@@ -486,6 +552,7 @@ export default function ImageFeedViewerScreen() {
         onToggleLike={onToggleLike}
         onPressLikeCount={() => setLikesOpen(true)}
         onPressComment={() => setCommentOpen(true)}
+        onPressLocation={handleOpenLocationMap}
         onPressMenu={!isGroupMode && activeFeedId ? handleMenu : undefined}
         showActions={!isGroupMode}
         showFooter={!isGroupMode}

@@ -12,13 +12,20 @@ export type SupportedSocialProvider = 'apple' | 'google' | 'kakao';
 
 const GOOGLE_IOS_CLIENT_ID =
   '962194932695-rmfmslpktbsu35oo97dmimacs3m739a9.apps.googleusercontent.com';
-const GOOGLE_WEB_CLIENT_ID = (
-  ((Config as any).GOOGLE_WEB_CLIENT_ID as string | undefined) ??
-  ((Config as any).GOOGLE_CLIENT_ID as string | undefined) ??
-  ''
-).trim();
+
+const readConfigString = (value: unknown) =>
+  typeof value === 'string' ? value.trim() : '';
+
+const GOOGLE_WEB_CLIENT_ID = readConfigString((Config as any).GOOGLE_WEB_CLIENT_ID);
 
 export const hasGoogleWebClientIdConfigured = () => GOOGLE_WEB_CLIENT_ID.length > 0;
+
+export const getGoogleClientConfigDebug = () => ({
+  iosClientId: GOOGLE_IOS_CLIENT_ID,
+  envGoogleWebClientId: readConfigString((Config as any).GOOGLE_WEB_CLIENT_ID) || null,
+  legacyGoogleClientId: readConfigString((Config as any).GOOGLE_CLIENT_ID) || null,
+  resolvedWebClientId: GOOGLE_WEB_CLIENT_ID || null,
+});
 
 export const configureGoogleSocialAuth = () => {
   GoogleSignin.configure({

@@ -1,6 +1,7 @@
 import Config from 'react-native-config';
 
 const PROFILE_BASE_URL = Config.PROFILE_BUCKET ?? '';
+const profileImageVersionByUsername = new Map<string, string>();
 
 const normalizeProfilePath = (value: string) => {
   const trimmed = value.trim();
@@ -33,10 +34,40 @@ const isHttpUrl = (value?: string | null) =>
 const isDataUrl = (value?: string | null) =>
   typeof value === 'string' && value.startsWith('data:');
 
+const normalizeUsernameKey = (value?: string | null) => (value ?? '').toString().trim().toLowerCase();
+
+const appendCacheBuster = (url: string, version?: string | null) => {
+  if (!version) {
+    return url;
+  }
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}v=${encodeURIComponent(version)}`;
+};
+
+export const markProfileImageUpdated = (
+  username?: string | null,
+  version?: string | null,
+) => {
+  const key = normalizeUsernameKey(username);
+  if (!key) {
+    return;
+  }
+  profileImageVersionByUsername.set(key, version?.trim() || String(Date.now()));
+};
+
+export const clearProfileImageUpdateMark = (username?: string | null) => {
+  const key = normalizeUsernameKey(username);
+  if (!key) {
+    return;
+  }
+  profileImageVersionByUsername.delete(key);
+};
+
 export const buildProfileUri = (
   username?: string | null,
   fileOrUrl?: string | null,
 ) => {
+  const cacheVersion = profileImageVersionByUsername.get(normalizeUsernameKey(username));
   const value = (fileOrUrl ?? '').toString().trim();
   if (value) {
     if (isDataUrl(value)) {
@@ -52,14 +83,14 @@ export const buildProfileUri = (
           if (idx >= 0) {
             const sliced = value.slice(idx + '/profileImage/'.length);
             const joined = joinUrl(PROFILE_BASE_URL, sliced);
-            if (joined) return joined;
+            if (joined) return appendCacheBuster(joined, cacheVersion);
           }
         }
       }
-      return value;
+      return appendCacheBuster(value, cacheVersion);
     }
     const joined = joinUrl(PROFILE_BASE_URL, value);
-    if (joined) return joined;
+    if (joined) return appendCacheBuster(joined, cacheVersion);
   }
   const seed = encodeURIComponent((username ?? 'plate_user').toString().trim());
   return `https://api.dicebear.com/8.x/identicon/png?seed=${seed}&size=64`;

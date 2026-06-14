@@ -22,33 +22,45 @@ import {
   getAccessToken as getKakaoAccessToken,
 } from '@react-native-seoul/kakao-login'; // ✅ Kakao
 import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin'; // ✅ Google
-import { useAuth } from '../../auth/AuthProvider';
+import {
+  useAuth,
+  type SocialProvider,
+  type SocialSignupRequired,
+} from '../../auth/AuthProvider';
 import {
   configureGoogleSocialAuth,
+  getGoogleClientConfigDebug,
   getGoogleIdTokenFromSignInResult,
   hasGoogleWebClientIdConfigured,
 } from '../../auth/socialAuth';
 import { createLogger } from '../../utils/logger';
-
-type SocialProvider = 'apple' | 'kakao' | 'google';
 
 type LoginScreenProps = {
   onLogin?: (id: string, password: string) => void | Promise<void>;
   onSignupPress?: () => void;
   onForgotPasswordPress?: () => void;
   onSocialLoginPress?: (provider: SocialProvider) => void;
+  onSocialSignupRequired?: (payload: SocialSignupRequired) => void;
   onContinueAsGuest?: () => void;
   initialId?: string;
 };
 
 const HIT_SLOP = { top: 8, bottom: 8, left: 8, right: 8 };
-const logger = createLogger('[LoginScreen]');
+const socialAuthLogger = createLogger('[social-auth]');
+
+const summarizeSocialError = (error: any) => ({
+  code: error?.code ?? null,
+  message: error?.message ?? null,
+  name: error?.name ?? null,
+  nativeStackAndroid: error?.nativeStackAndroid ? 'present' : null,
+});
 
 const LoginScreen = ({
   onLogin,
   onSignupPress,
   onForgotPasswordPress,
   onSocialLoginPress,
+  onSocialSignupRequired,
   onContinueAsGuest,
   initialId = '',
 }: LoginScreenProps) => {
@@ -77,6 +89,15 @@ const LoginScreen = ({
     Alert.alert(title, message);
   }, []);
 
+  const handleSocialAuthResult = useCallback(
+    (result: Awaited<ReturnType<typeof socialLogin>>) => {
+      if (result.kind === 'signup_required') {
+        onSocialSignupRequired?.(result);
+      }
+    },
+    [onSocialSignupRequired],
+  );
+
   /** 일반 로그인 */
   const handleLoginPress = useCallback(async () => {
     if (!canSubmit || !onLogin) return;
@@ -97,20 +118,17 @@ const LoginScreen = ({
         requestedScopes: [appleAuth.Scope.FULL_NAME, appleAuth.Scope.EMAIL],
       });
       const { identityToken, authorizationCode, user: appleUser } = response;
-      logger.debug('apple sign-in completed', {
-        hasIdentityToken: Boolean(identityToken),
-        hasAuthorizationCode: Boolean(authorizationCode),
-      });
       if (!identityToken) {
         showSocialFailure('Apple 로그인 실패', 'Apple 로그인 정보를 가져오지 못했어요.');
         return;
       }
 
-      await socialLogin('apple', {
+      const result = await socialLogin('apple', {
         identityToken,
         authorizationCode,
         user: appleUser,
       });
+      handleSocialAuthResult(result);
     } catch (e: any) {
       if (e?.code === appleAuth.Error.CANCELED) {
         return;
@@ -125,24 +143,26 @@ const LoginScreen = ({
   const handleKakaoLogin = async () => {
     try {
       setSocialSubmitting('kakao');
+      socialAuthLogger.debug('kakao login start', { platform: Platform.OS });
       await kakaoLogin(); // 이미 로그인되어 있으면 토큰 갱신
 
       const token = await getKakaoAccessToken();
-      logger.debug('kakao sign-in completed', {
-        hasAccessToken: Boolean(token?.accessToken),
-      });
       if (!token?.accessToken) {
+        socialAuthLogger.warn('kakao token missing', { platform: Platform.OS });
         showSocialFailure('카카오 로그인 실패', '카카오 로그인 토큰을 가져오지 못했어요.');
         return;
       }
 
-      await socialLogin('kakao', {
+      socialAuthLogger.debug('kakao token received', { platform: Platform.OS });
+      const result = await socialLogin('kakao', {
         accessToken: token.accessToken,
       });
+      handleSocialAuthResult(result);
     } catch (e: any) {
       if (e?.code === 'E_CANCELLED_OPERATION' || e?.code === 'E_CANCELLED') {
         return;
       }
+      socialAuthLogger.warn('kakao login failed', summarizeSocialError(e));
       showSocialFailure('카카오 로그인 실패', e?.message || '카카오 로그인을 진행하지 못했어요.');
     } finally {
       setSocialSubmitting(null);
@@ -153,7 +173,12 @@ const LoginScreen = ({
   const handleGoogleLogin = async () => {
     try {
       setSocialSubmitting('google');
+      socialAuthLogger.debug('google login start', {
+        platform: Platform.OS,
+        config: getGoogleClientConfigDebug(),
+      });
       if (Platform.OS === 'android' && !hasGoogleWebClientIdConfigured()) {
+        socialAuthLogger.warn('google web client id missing', getGoogleClientConfigDebug());
         showSocialFailure(
           'Google 로그인 설정 필요',
           'Android용 Google Web Client ID가 설정되지 않아 로그인을 진행할 수 없어요.',
@@ -165,13 +190,12 @@ const LoginScreen = ({
 
       const signInResult = await GoogleSignin.signIn();
       const idToken = await getGoogleIdTokenFromSignInResult(signInResult);
-      logger.debug('google sign-in completed', {
-        responseType: (signInResult as any)?.type ?? 'legacy',
-        hasWebClientId: hasGoogleWebClientIdConfigured(),
-        hasIdToken: Boolean(idToken),
-      });
 
       if (!idToken) {
+        socialAuthLogger.warn('google id token missing', {
+          platform: Platform.OS,
+          config: getGoogleClientConfigDebug(),
+        });
         showSocialFailure(
           'Google 로그인 실패',
           'Google ID 토큰을 가져오지 못했어요. Firebase/Google Cloud의 Web Client ID 설정을 확인해주세요.',
@@ -179,13 +203,19 @@ const LoginScreen = ({
         return;
       }
 
-      await socialLogin('google', {
+      socialAuthLogger.debug('google id token received', { platform: Platform.OS });
+      const result = await socialLogin('google', {
         idToken,
       });
+      handleSocialAuthResult(result);
     } catch (e: any) {
       if (e?.code === statusCodes.SIGN_IN_CANCELLED) {
         return;
       }
+      socialAuthLogger.warn('google login failed', {
+        ...summarizeSocialError(e),
+        config: getGoogleClientConfigDebug(),
+      });
       showSocialFailure('Google 로그인 실패', e?.message || 'Google 로그인을 진행하지 못했어요.');
     } finally {
       setSocialSubmitting(null);

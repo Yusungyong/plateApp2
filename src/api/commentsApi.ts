@@ -73,58 +73,55 @@ export const createVideoFeedComment = async (
 };
 
 export const updateVideoFeedComment = async (
-  storeId: number,
+  _storeId: number,
   commentId: number,
   payload: UpdateCommentPayload,
 ): Promise<Comment> => {
-  const response = await api.put<Comment>(`/api/stores/${storeId}/comments/${commentId}`, payload);
+  const response = await api.put<Comment>(`/api/comments/${commentId}`, payload);
   return extractSingleItem(response.data);
 };
 
-export const deleteVideoFeedComment = async (storeId: number, commentId: number): Promise<void> => {
-  await api.delete(`/api/stores/${storeId}/comments/${commentId}`);
+export const deleteVideoFeedComment = async (_storeId: number, commentId: number): Promise<void> => {
+  await api.delete(`/api/comments/${commentId}`);
 };
 
 // ========================================
 // Video Feed (Store) Comment Replies - fp_450 테이블
 // ========================================
 export const fetchVideoFeedReplies = async (
-  storeId: number,
+  _storeId: number,
   commentId: number,
   params: PaginationParams = {},
 ): Promise<Reply[]> => {
-  const response = await api.get<Reply[]>(`/api/stores/${storeId}/comments/${commentId}/replies`, { params });
+  const response = await api.get<Reply[]>(`/api/comments/${commentId}/replies`, { params });
   return extractData(response.data);
 };
 
 export const createVideoFeedReply = async (
-  storeId: number,
+  _storeId: number,
   commentId: number,
   payload: CreateReplyPayload,
 ): Promise<Reply> => {
-  const response = await api.post<Reply>(`/api/stores/${storeId}/comments/${commentId}/replies`, payload);
+  const response = await api.post<Reply>(`/api/comments/${commentId}/replies`, payload);
   return extractSingleItem(response.data);
 };
 
 export const updateVideoFeedReply = async (
-  storeId: number,
-  commentId: number,
+  _storeId: number,
+  _commentId: number,
   replyId: number,
   payload: UpdateReplyPayload,
 ): Promise<Reply> => {
-  const response = await api.put<Reply>(
-    `/api/stores/${storeId}/comments/${commentId}/replies/${replyId}`,
-    payload,
-  );
+  const response = await api.put<Reply>(`/api/replies/${replyId}`, payload);
   return extractSingleItem(response.data);
 };
 
 export const deleteVideoFeedReply = async (
-  storeId: number,
-  commentId: number,
+  _storeId: number,
+  _commentId: number,
   replyId: number,
 ): Promise<void> => {
-  await api.delete(`/api/stores/${storeId}/comments/${commentId}/replies/${replyId}`);
+  await api.delete(`/api/replies/${replyId}`);
 };
 
 // ========================================
@@ -147,58 +144,55 @@ export const createImageFeedComment = async (
 };
 
 export const updateImageFeedComment = async (
-  feedId: number,
+  _feedId: number,
   commentId: number,
   payload: UpdateCommentPayload,
 ): Promise<Comment> => {
-  const response = await api.put<Comment>(`/api/image-feeds/${feedId}/comments/${commentId}`, payload);
+  const response = await api.put<Comment>(`/api/image-feeds/comments/${commentId}`, payload);
   return extractSingleItem(response.data);
 };
 
-export const deleteImageFeedComment = async (feedId: number, commentId: number): Promise<void> => {
-  await api.delete(`/api/image-feeds/${feedId}/comments/${commentId}`);
+export const deleteImageFeedComment = async (_feedId: number, commentId: number): Promise<void> => {
+  await api.delete(`/api/image-feeds/comments/${commentId}`);
 };
 
 // ========================================
 // Image Feed Comment Replies - fp_470 테이블
 // ========================================
 export const fetchImageFeedReplies = async (
-  feedId: number,
+  _feedId: number,
   commentId: number,
   params: PaginationParams = {},
 ): Promise<Reply[]> => {
-  const response = await api.get<Reply[]>(`/api/image-feeds/${feedId}/comments/${commentId}/replies`, { params });
+  const response = await api.get<Reply[]>(`/api/image-feeds/comments/${commentId}/replies`, { params });
   return extractData(response.data);
 };
 
 export const createImageFeedReply = async (
-  feedId: number,
+  _feedId: number,
   commentId: number,
   payload: CreateReplyPayload,
 ): Promise<Reply> => {
-  const response = await api.post<Reply>(`/api/image-feeds/${feedId}/comments/${commentId}/replies`, payload);
+  const response = await api.post<Reply>(`/api/image-feeds/comments/${commentId}/replies`, payload);
   return extractSingleItem(response.data);
 };
 
 export const updateImageFeedReply = async (
-  feedId: number,
-  commentId: number,
+  _feedId: number,
+  _commentId: number,
   replyId: number,
   payload: UpdateReplyPayload,
 ): Promise<Reply> => {
-  const response = await api.put<Reply>(
-    `/api/image-feeds/${feedId}/comments/${commentId}/replies/${replyId}`,
-    payload,
-  );
+  const response = await api.put<Reply>(`/api/image-feeds/replies/${replyId}`, payload);
   return extractSingleItem(response.data);
 };
 
 export const deleteImageFeedReply = async (
-  feedId: number,
-  commentId: number,
+  _feedId: number,
+  _commentId: number,
   replyId: number,
 ): Promise<void> => {
-  await api.delete(`/api/image-feeds/${feedId}/comments/${commentId}/replies/${replyId}`);
+  await api.delete(`/api/image-feeds/replies/${replyId}`);
 };
 
 // ========================================

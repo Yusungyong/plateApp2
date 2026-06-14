@@ -1,6 +1,6 @@
 // src/notifications/notificationEvents.ts
 export type NotificationEvent = {
-  type: 'message';
+  type: 'message' | 'refresh';
 };
 
 type Listener = (event: NotificationEvent) => void;

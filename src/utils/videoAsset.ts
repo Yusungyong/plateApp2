@@ -1,9 +1,9 @@
-import { IMAGE_BUCKET_THUMBNAIL, VIDEO_BUCKET } from '../config/buckets';
+import { IMAGE_BUCKET, VIDEO_BUCKET } from '../config/buckets';
 import { proxifyRemoteUrl } from '../config/devProxy';
 
-const NEW_PATH_CUTOFF_MS = Date.parse('2026-01-01T00:00:00Z');
 const DEFAULT_S3_REGION = 'ap-northeast-2';
 const VIDEO_LIKE_EXTENSIONS = new Set(['mov', 'mp4', 'm4v', 'avi', 'mkv', 'webm']);
+const VIDEO_THUMBNAIL_PREFIX = 'foodimages/';
 
 const getFileExtension = (value?: string | null) => {
   if (!value) return '';
@@ -22,18 +22,25 @@ const joinUrl = (base: string, path: string) => {
 const isHttpUrl = (value?: string | null) =>
   typeof value === 'string' && /^https?:\/\//i.test(value);
 
-export const isNewVideoPath = (createdAt?: string | null) => {
-  if (!createdAt) return false;
-  const ts = Date.parse(createdAt);
-  return Number.isFinite(ts) && ts >= NEW_PATH_CUTOFF_MS;
+const stripVideoThumbnailPrefix = (value: string) => {
+  if (value.startsWith(`/${VIDEO_THUMBNAIL_PREFIX}`)) {
+    return value.slice(VIDEO_THUMBNAIL_PREFIX.length + 1);
+  }
+  if (value.startsWith(VIDEO_THUMBNAIL_PREFIX)) {
+    return value.slice(VIDEO_THUMBNAIL_PREFIX.length);
+  }
+  return value;
 };
+
+const normalizeVideoFileName = (value: string) =>
+  value.replace(/\.{2,}(?=(mov|mp4|m4v|avi|mkv|webm)(?:[?#]|$))/gi, '.');
 
 export const resolveVideoRemoteUrl = (
   fileName?: string | null,
-  createdAt?: string | null,
+  _createdAt?: string | null,
 ) => {
   if (!fileName) return undefined;
-  const normalizedFile = fileName.replace(/\/+$/, '');
+  const normalizedFile = normalizeVideoFileName(fileName.replace(/\/+$/, ''));
 
   if (isHttpUrl(normalizedFile)) {
     if (VIDEO_BUCKET && !normalizedFile.startsWith(VIDEO_BUCKET)) {
@@ -66,10 +73,6 @@ export const resolveVideoRemoteUrl = (
     return normalizedFile;
   }
 
-  if (isNewVideoPath(createdAt)) {
-    return normalizedFile;
-  }
-
   if (!VIDEO_BUCKET) {
     return normalizedFile;
   }
@@ -95,20 +98,36 @@ export const isRenderableVideoThumbnailPath = (fileName?: string | null) => {
 
 export const resolveVideoThumbnailRemoteUrl = (
   fileName?: string | null,
-  createdAt?: string | null,
+  _createdAt?: string | null,
 ) => {
   if (!fileName) return undefined;
   if (!isRenderableVideoThumbnailPath(fileName)) {
     return undefined;
   }
-  const normalizedFile = fileName.replace(/\/+$/, '');
+  const normalizedFile = stripVideoThumbnailPrefix(fileName.replace(/\/+$/, ''));
   if (isHttpUrl(normalizedFile)) {
+    if (IMAGE_BUCKET && !normalizedFile.startsWith(IMAGE_BUCKET)) {
+      try {
+        const parsed = new URL(normalizedFile) as any;
+        const bucketUrl = new URL(IMAGE_BUCKET) as any;
+        const bucketPath = bucketUrl.pathname.replace(/\/+$/, '');
+        const filePath = parsed.pathname.replace(/\/+$/, '');
+        const normalizedPath =
+          bucketPath && bucketPath !== '/' && filePath.startsWith(`${bucketPath}/`)
+            ? filePath
+            : `${bucketPath}${filePath.startsWith('/') ? '' : '/'}${filePath}`;
+
+        return `${bucketUrl.protocol}//${bucketUrl.host}${normalizedPath}${parsed.search}`;
+      } catch {
+        return normalizedFile;
+      }
+    }
     return normalizedFile;
   }
-  if (!IMAGE_BUCKET_THUMBNAIL) {
+  if (!IMAGE_BUCKET) {
     return normalizedFile;
   }
-  return joinUrl(IMAGE_BUCKET_THUMBNAIL, normalizedFile);
+  return joinUrl(IMAGE_BUCKET, normalizedFile);
 };
 
 export const buildVideoThumbnailUrl = (

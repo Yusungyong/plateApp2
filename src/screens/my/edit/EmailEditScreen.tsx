@@ -7,7 +7,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import AppLayout from '../../../components/layout/AppLayout';
 import type { RootStackParamList } from '../../../navigation/MainNavigation';
 import { useAuth } from '../../../auth/AuthProvider';
-import { updateUserEmail } from '../../../api/userApi';
+import { updateMyUserProfile } from '../../../api/userApi';
 import { logProfileHistory } from '../../../utils/profileHistoryLogger';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -16,7 +16,7 @@ type Route = RouteProp<RootStackParamList, 'EditEmail'>;
 const EmailEditScreen: React.FC = () => {
   const navigation = useNavigation<Nav>();
   const route = useRoute<Route>();
-  const { user } = useAuth();
+  const { user, patchUser, refreshUser } = useAuth();
   const initialEmailRef = useRef(route.params?.initialValue ?? user?.email ?? '');
   const [email, setEmail] = useState(initialEmailRef.current);
   const [saving, setSaving] = useState(false);
@@ -34,7 +34,12 @@ const EmailEditScreen: React.FC = () => {
         Alert.alert('이메일 확인', '올바른 이메일 주소를 입력해 주세요.');
         return;
       }
-      await updateUserEmail(user.username, trimmed);
+      await updateMyUserProfile({ email: trimmed });
+      try {
+        await refreshUser();
+      } catch {
+        patchUser({ email: trimmed });
+      }
       await logProfileHistory(user.username, {
         changeType: 'EMAIL',
         before: { email: initialEmailRef.current },
@@ -42,7 +47,7 @@ const EmailEditScreen: React.FC = () => {
         memo: 'EmailEditScreen',
       });
       navigation.goBack();
-    } catch (e) {
+    } catch {
       Alert.alert('실패', '이메일을 저장하지 못했어요.');
     } finally {
       setSaving(false);

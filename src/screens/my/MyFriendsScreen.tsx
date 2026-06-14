@@ -10,7 +10,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -29,16 +29,14 @@ import {
 import {
   fetchFriendRecentStores,
   fetchFriendVisitFeed,
-  fetchUpcomingFriendVisits,
   type FriendRecentStore,
-  type FriendUpcomingVisit,
   type FriendVisitItem,
 } from '../../api/friendVisitApi';
 import { fetchVideoFeed } from '../../api/videoFeedApi';
 import { useTheme } from '../../styles/theme';
 import { buildProfileUri } from '../../utils/profileImage';
 import { useAuth } from '../../auth/AuthProvider';
-import { formatDate, formatMonthDay } from '../../utils/dateTime';
+import { formatDate } from '../../utils/dateTime';
 import ProfileSectionCard from './components/ProfileSectionCard';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -56,6 +54,7 @@ const FriendAvatar: React.FC<{
 
 const MyFriendsScreen: React.FC = () => {
   const navigation = useNavigation<Nav>();
+  const route = useRoute<{ key: string; name: string; params?: RootStackParamList['MyFriends'] }>();
   const { user } = useAuth();
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
@@ -64,7 +63,8 @@ const MyFriendsScreen: React.FC = () => {
   const [requests, setRequests] = useState<FriendRequest[]>([]);
   const [sentRequests, setSentRequests] = useState<FriendRequest[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<FriendTab>('friends');
+  const initialTab = route.params?.initialTab;
+  const [activeTab, setActiveTab] = useState<FriendTab>(initialTab ?? 'activity');
   const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState<FriendProfile[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
@@ -73,8 +73,6 @@ const MyFriendsScreen: React.FC = () => {
   const [visitLoading, setVisitLoading] = useState(false);
   const [recentStores, setRecentStores] = useState<FriendRecentStore[]>([]);
   const [recentLoading, setRecentLoading] = useState(false);
-  const [upcomingVisits, setUpcomingVisits] = useState<FriendUpcomingVisit[]>([]);
-  const [upcomingLoading, setUpcomingLoading] = useState(false);
   const [activityLoaded, setActivityLoaded] = useState(false);
   const [openingStoreId, setOpeningStoreId] = useState<number | null>(null);
 
@@ -111,8 +109,15 @@ const MyFriendsScreen: React.FC = () => {
   }, [username]);
 
   useEffect(() => {
-    void loadData();
+    loadData().catch(() => undefined);
   }, [loadData]);
+
+  useEffect(() => {
+    if (!initialTab) {
+      return;
+    }
+    setActiveTab(initialTab);
+  }, [initialTab]);
 
   const loadVisitFeed = useCallback(async () => {
     if (!username) {
@@ -154,41 +159,16 @@ const MyFriendsScreen: React.FC = () => {
     }
   }, [username]);
 
-  const loadUpcomingVisits = useCallback(async () => {
-    if (!username) {
-      setUpcomingVisits([]);
-      setUpcomingLoading(false);
-      return;
-    }
-    try {
-      setUpcomingLoading(true);
-      const today = new Date();
-      const from = today.toISOString();
-      const to = new Date(today.getTime() + 1000 * 60 * 60 * 24 * 14).toISOString();
-      const res = await fetchUpcomingFriendVisits({
-        username,
-        from,
-        to,
-        limit: 5,
-      });
-      setUpcomingVisits(res ?? []);
-    } catch {
-      setUpcomingVisits([]);
-    } finally {
-      setUpcomingLoading(false);
-    }
-  }, [username]);
-
   const loadActivityBundle = useCallback(async () => {
-    await Promise.all([loadVisitFeed(), loadRecentStores(), loadUpcomingVisits()]);
-  }, [loadRecentStores, loadUpcomingVisits, loadVisitFeed]);
+    await Promise.all([loadVisitFeed(), loadRecentStores()]);
+  }, [loadRecentStores, loadVisitFeed]);
 
   useEffect(() => {
     if (activeTab !== 'activity' || activityLoaded || !username) {
       return;
     }
     setActivityLoaded(true);
-    void loadActivityBundle();
+    loadActivityBundle().catch(() => undefined);
   }, [activeTab, activityLoaded, loadActivityBundle, username]);
 
   useEffect(() => {
@@ -303,6 +283,19 @@ const MyFriendsScreen: React.FC = () => {
     [navigation],
   );
 
+  const handleOpenFriendHistoryByName = useCallback(
+    (friendUsername?: string | null, friendNickname?: string | null) => {
+      if (!friendUsername) {
+        return;
+      }
+      navigation.navigate('FriendVisitHistory', {
+        friendUsername,
+        friendNickname: friendNickname ?? friendUsername,
+      });
+    },
+    [navigation],
+  );
+
   const handleOpenStoreVideos = useCallback(
     async (store: FriendRecentStore) => {
       if (!username) {
@@ -318,7 +311,6 @@ const MyFriendsScreen: React.FC = () => {
       setOpeningStoreId(store.storeId);
       try {
         const preview = await fetchVideoFeed({
-          username,
           storeId: store.storeId,
           placeId: store.placeId,
         });
@@ -329,7 +321,6 @@ const MyFriendsScreen: React.FC = () => {
         navigation.navigate('VideoFeedScreen', {
           storeId: store.storeId,
           placeId: store.placeId,
-          username,
         });
       } catch {
         Alert.alert('열 수 없어요', '서버에서 영상을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.');
@@ -347,22 +338,143 @@ const MyFriendsScreen: React.FC = () => {
       { key: 'sent', label: '보낸 요청', value: String(sentRequests.length) },
       {
         key: 'visits',
-        label: '다가올 약속',
-        value: activityLoaded ? String(upcomingVisits.length) : '-',
+        label: '최근 방문',
+        value: activityLoaded ? String(visitFeed.length) : '-',
       },
     ],
-    [activityLoaded, friends.length, requests.length, sentRequests.length, upcomingVisits.length],
+    [activityLoaded, friends.length, requests.length, sentRequests.length, visitFeed.length],
   );
 
   const tabs = useMemo(
     () => [
-      { key: 'discover' as const, label: '탐색' },
-      { key: 'requests' as const, label: '요청' },
-      { key: 'friends' as const, label: '친구' },
       { key: 'activity' as const, label: '활동' },
+      { key: 'requests' as const, label: '요청' },
+      { key: 'discover' as const, label: '탐색' },
+      { key: 'friends' as const, label: '친구' },
     ],
     [],
   );
+
+  const primaryActions = useMemo(
+    () => [
+      {
+        key: 'activity' as const,
+        label: '친구 활동',
+        hint: visitFeed.length > 0 ? '최근 함께한 방문 보기' : '최근 방문과 추천 가게 보기',
+      },
+      {
+        key: 'requests' as const,
+        label: '요청 확인',
+        hint:
+          requests.length > 0
+            ? `받은 요청 ${requests.length}건`
+            : sentRequests.length > 0
+            ? `보낸 요청 ${sentRequests.length}건`
+            : '친구 요청 관리',
+      },
+      {
+        key: 'discover' as const,
+        label: '친구 찾기',
+        hint: '닉네임이나 활동 지역으로 탐색',
+      },
+    ],
+    [requests.length, sentRequests.length, visitFeed.length],
+  );
+
+  const activitySummary = useMemo(
+    () => [
+      { key: 'stores', label: '추천 가게', value: recentStores.length },
+      { key: 'visits', label: '최근 방문', value: visitFeed.length },
+    ],
+    [recentStores.length, visitFeed.length],
+  );
+
+  const visibleRecentStores = useMemo(() => {
+    const deduped = new Map<number, FriendRecentStore>();
+    recentStores.forEach((store) => {
+      const prev = deduped.get(store.storeId);
+      if (!prev) {
+        deduped.set(store.storeId, store);
+        return;
+      }
+      const prevCount = prev.visitCount ?? 0;
+      const nextCount = store.visitCount ?? 0;
+      const prevTime = prev.lastVisitedAt ? new Date(prev.lastVisitedAt).getTime() : 0;
+      const nextTime = store.lastVisitedAt ? new Date(store.lastVisitedAt).getTime() : 0;
+      if (nextCount > prevCount || nextTime > prevTime) {
+        deduped.set(store.storeId, store);
+      }
+    });
+
+    return Array.from(deduped.values())
+      .sort((a, b) => {
+        const countDiff = (b.visitCount ?? 0) - (a.visitCount ?? 0);
+        if (countDiff !== 0) {
+          return countDiff;
+        }
+        const aTime = a.lastVisitedAt ? new Date(a.lastVisitedAt).getTime() : 0;
+        const bTime = b.lastVisitedAt ? new Date(b.lastVisitedAt).getTime() : 0;
+        return bTime - aTime;
+      })
+      .slice(0, 4);
+  }, [recentStores]);
+
+  const visibleVisitHighlights = useMemo(() => {
+    const grouped = new Map<
+      string,
+      {
+        friendName: string;
+        friendNickname?: string | null;
+        friendProfileImageUrl?: string | null;
+        latestVisit: FriendVisitItem;
+        count: number;
+      }
+    >();
+
+    visitFeed.forEach((visit) => {
+      const key = (visit.friendName ?? '').trim().toLowerCase();
+      if (!key) {
+        return;
+      }
+      const current = grouped.get(key);
+      const visitTime = new Date(visit.visitDate ?? visit.createdAt ?? 0).getTime();
+
+      if (!current) {
+        grouped.set(key, {
+          friendName: visit.friendName,
+          friendNickname: visit.friendNickname ?? null,
+          friendProfileImageUrl: visit.friendProfileImageUrl ?? null,
+          latestVisit: visit,
+          count: 1,
+        });
+        return;
+      }
+
+      const currentTime = new Date(
+        current.latestVisit.visitDate ?? current.latestVisit.createdAt ?? 0,
+      ).getTime();
+
+      grouped.set(key, {
+        friendName: current.friendName,
+        friendNickname: current.friendNickname,
+        friendProfileImageUrl: current.friendProfileImageUrl,
+        latestVisit: visitTime > currentTime ? visit : current.latestVisit,
+        count: current.count + 1,
+      });
+    });
+
+    return Array.from(grouped.values())
+      .sort((a, b) => {
+        const aTime = new Date(
+          a.latestVisit.visitDate ?? a.latestVisit.createdAt ?? 0,
+        ).getTime();
+        const bTime = new Date(
+          b.latestVisit.visitDate ?? b.latestVisit.createdAt ?? 0,
+        ).getTime();
+        return bTime - aTime;
+      })
+      .slice(0, 4);
+  }, [visitFeed]);
 
   const renderDiscoverTab = () => (
     <>
@@ -550,36 +662,14 @@ const MyFriendsScreen: React.FC = () => {
   const renderActivityTab = () => (
     <>
       <ProfileSectionCard style={styles.sectionCard}>
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>다가올 약속</Text>
-          <TouchableOpacity style={styles.sectionHintBtn} onPress={loadUpcomingVisits}>
-            <Text style={styles.sectionHintBtnText}>새로고침</Text>
-          </TouchableOpacity>
-        </View>
-        {upcomingLoading ? (
-          <Text style={styles.emptyHint}>친구 약속을 불러오는 중…</Text>
-        ) : upcomingVisits.length === 0 ? (
-          <Text style={styles.emptyHint}>2주 이내 예정된 일정이 없어요.</Text>
-        ) : (
-          upcomingVisits.map((visit) => (
-            <View key={visit.id} style={styles.upcomingRow}>
-              <View style={styles.upcomingInfo}>
-                <Text style={styles.friendName}>{visit.friendNickname || visit.friendName}</Text>
-                <Text style={styles.friendMeta} numberOfLines={1}>
-                  {visit.storeName} · {visit.address ?? '주소 없음'}
-                </Text>
-                {visit.memo ? (
-                  <Text style={styles.activityMemo} numberOfLines={1}>
-                    "{visit.memo}"
-                  </Text>
-                ) : null}
-              </View>
-              <View style={styles.upcomingDate}>
-                <Text style={styles.upcomingDateText}>{formatMonthDay(visit.visitDate)}</Text>
-              </View>
+        <View style={styles.activityOverviewRow}>
+          {activitySummary.map((item) => (
+            <View key={item.key} style={styles.activityOverviewTile}>
+              <Text style={styles.activityOverviewLabel}>{item.label}</Text>
+              <Text style={styles.activityOverviewValue}>{item.value}</Text>
             </View>
-          ))
-        )}
+          ))}
+        </View>
       </ProfileSectionCard>
 
       <ProfileSectionCard style={styles.sectionCard}>
@@ -591,10 +681,10 @@ const MyFriendsScreen: React.FC = () => {
         </View>
         {recentLoading ? (
           <Text style={styles.emptyHint}>친구들이 좋아하는 가게를 불러오는 중…</Text>
-        ) : recentStores.length === 0 ? (
+        ) : visibleRecentStores.length === 0 ? (
           <Text style={styles.emptyHint}>아직 추천할 가게가 없어요.</Text>
         ) : (
-          recentStores.map((store, index) => (
+          visibleRecentStores.map((store, index) => (
             <View key={`${store.storeId}-${index}`} style={styles.storeCard}>
               <View style={styles.storeInfo}>
                 <Text style={styles.friendName}>{store.storeName}</Text>
@@ -605,19 +695,35 @@ const MyFriendsScreen: React.FC = () => {
                   친구 {store.visitCount}명 방문 · 최근 {store.friends?.[0]?.friendName ?? '친구'} 다녀감
                 </Text>
               </View>
-              <TouchableOpacity
-                style={[
-                  styles.visitButton,
-                  openingStoreId === store.storeId && styles.visitButtonDisabled,
-                ]}
-                onPress={() => handleOpenStoreVideos(store)}
-                disabled={openingStoreId === store.storeId}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.visitButtonText}>
-                  {openingStoreId === store.storeId ? '확인 중…' : '보러가기'}
-                </Text>
-              </TouchableOpacity>
+              <View style={styles.storeActions}>
+                <TouchableOpacity
+                  style={[
+                    styles.visitButton,
+                    openingStoreId === store.storeId && styles.visitButtonDisabled,
+                  ]}
+                  onPress={() => handleOpenStoreVideos(store)}
+                  disabled={openingStoreId === store.storeId}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.visitButtonText}>
+                    {openingStoreId === store.storeId ? '확인 중…' : '영상 보기'}
+                  </Text>
+                </TouchableOpacity>
+                {store.friends?.[0]?.friendName ? (
+                  <TouchableOpacity
+                    style={styles.storeGhostButton}
+                    onPress={() =>
+                      handleOpenFriendHistoryByName(
+                        store.friends?.[0]?.friendName,
+                        store.friends?.[0]?.friendName,
+                      )
+                    }
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.storeGhostText}>친구 기록</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
             </View>
           ))
         )}
@@ -632,23 +738,45 @@ const MyFriendsScreen: React.FC = () => {
         </View>
         {visitLoading ? (
           <Text style={styles.emptyHint}>친구 활동을 불러오는 중…</Text>
-        ) : visitFeed.length === 0 ? (
+        ) : visibleVisitHighlights.length === 0 ? (
           <Text style={styles.emptyHint}>아직 친구와 함께한 방문 메모가 없어요.</Text>
         ) : (
-          visitFeed.map((visit) => (
-            <View key={visit.id} style={styles.visitRow}>
-              <View style={styles.visitInfo}>
-                <Text style={styles.friendName}>{visit.friendNickname || visit.friendName}</Text>
-                <Text style={styles.friendMeta}>
-                  {visit.storeName} · {visit.visitDate ?? '방문일 미상'}
+          visibleVisitHighlights.map((item) => (
+            <TouchableOpacity
+              key={item.friendName}
+              style={styles.visitSummaryCard}
+              onPress={() =>
+                handleOpenFriendHistoryByName(
+                  item.friendName,
+                  item.friendNickname ?? item.friendName,
+                )
+              }
+              activeOpacity={0.86}
+            >
+              <FriendAvatar
+                uri={item.friendProfileImageUrl}
+                username={item.friendName}
+                styles={styles}
+              />
+              <View style={styles.visitSummaryCopy}>
+                <Text style={styles.friendName}>
+                  {item.friendNickname || item.friendName}
                 </Text>
-                {visit.memo ? (
+                <Text style={styles.friendMeta}>
+                  최근 {item.latestVisit.storeName} ·{' '}
+                  {formatDate(item.latestVisit.visitDate) || '방문일 미상'}
+                </Text>
+                <Text style={styles.timelineText}>
+                  함께 남긴 기록 {item.count}개
+                </Text>
+                {item.latestVisit.memo ? (
                   <Text style={styles.activityMemo} numberOfLines={2}>
-                    {visit.memo}
+                    {item.latestVisit.memo}
                   </Text>
                 ) : null}
               </View>
-            </View>
+              <Text style={styles.visitSummaryAction}>기록 보기</Text>
+            </TouchableOpacity>
           ))
         )}
       </ProfileSectionCard>
@@ -688,10 +816,10 @@ const MyFriendsScreen: React.FC = () => {
             ) : null}
 
             <ProfileSectionCard style={styles.heroCard}>
-              <Text style={styles.heroTitle}>친구와 연결된 활동을 한눈에 정리하세요.</Text>
+              <Text style={styles.heroTitle}>친구와의 방문과 연결을 바로 이어보세요.</Text>
               <Text style={styles.heroSubtitle}>
-                검색, 요청 관리, 친구 목록, 방문 활동을 탭별로 나눠 더 자연스럽게 볼 수 있게
-                바꿨습니다.
+                친구 요청을 확인하고, 함께 다녀간 가게를 보고, 다음에 갈 곳까지 한 화면에서
+                이어갈 수 있어요.
               </Text>
 
               <View style={styles.metricGrid}>
@@ -700,6 +828,30 @@ const MyFriendsScreen: React.FC = () => {
                     <Text style={styles.metricLabel}>{item.label}</Text>
                     <Text style={styles.metricValue}>{item.value}</Text>
                   </View>
+                ))}
+              </View>
+
+              <View style={styles.primaryActionRow}>
+                {primaryActions.map((item) => (
+                  <TouchableOpacity
+                    key={item.key}
+                    style={[
+                      styles.primaryActionCard,
+                      activeTab === item.key && styles.primaryActionCardActive,
+                    ]}
+                    onPress={() => setActiveTab(item.key)}
+                    activeOpacity={0.86}
+                  >
+                    <Text
+                      style={[
+                        styles.primaryActionLabel,
+                        activeTab === item.key && styles.primaryActionLabelActive,
+                      ]}
+                    >
+                      {item.label}
+                    </Text>
+                    <Text style={styles.primaryActionHint}>{item.hint}</Text>
+                  </TouchableOpacity>
                 ))}
               </View>
             </ProfileSectionCard>
@@ -789,6 +941,57 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) =>
     metricValue: {
       marginTop: 6,
       fontSize: 17,
+      fontWeight: '800',
+      color: colors.textPrimary,
+    },
+    primaryActionRow: {
+      marginTop: 4,
+      gap: 10,
+    },
+    primaryActionCard: {
+      borderRadius: 18,
+      paddingHorizontal: 14,
+      paddingVertical: 14,
+      backgroundColor: colors.background,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.borderDefault,
+    },
+    primaryActionCardActive: {
+      backgroundColor: colors.backgroundSoft,
+      borderColor: colors.brandPrimary,
+    },
+    primaryActionLabel: {
+      fontSize: 14,
+      fontWeight: '800',
+      color: colors.textPrimary,
+    },
+    primaryActionLabelActive: {
+      color: colors.brandPrimary,
+    },
+    primaryActionHint: {
+      marginTop: 5,
+      fontSize: 12,
+      lineHeight: 17,
+      color: colors.textSecondary,
+    },
+    activityOverviewRow: {
+      flexDirection: 'row',
+      gap: 10,
+    },
+    activityOverviewTile: {
+      flex: 1,
+      borderRadius: 16,
+      paddingHorizontal: 12,
+      paddingVertical: 12,
+      backgroundColor: colors.backgroundSoft,
+    },
+    activityOverviewLabel: {
+      fontSize: 12,
+      color: colors.textSecondary,
+    },
+    activityOverviewValue: {
+      marginTop: 5,
+      fontSize: 18,
       fontWeight: '800',
       color: colors.textPrimary,
     },
@@ -1030,30 +1233,6 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) =>
       fontWeight: '700',
       color: '#c43737',
     },
-    upcomingRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      paddingVertical: 12,
-      borderTopWidth: StyleSheet.hairlineWidth,
-      borderTopColor: colors.borderDefault,
-    },
-    upcomingInfo: {
-      flex: 1,
-      paddingRight: 10,
-    },
-    upcomingDate: {
-      minWidth: 64,
-      borderRadius: 14,
-      paddingHorizontal: 12,
-      paddingVertical: 10,
-      backgroundColor: colors.backgroundSoft,
-      alignItems: 'center',
-    },
-    upcomingDateText: {
-      fontSize: 12,
-      fontWeight: '700',
-      color: colors.textPrimary,
-    },
     activityMemo: {
       fontSize: 12,
       color: colors.textSecondary,
@@ -1071,6 +1250,10 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) =>
       flex: 1,
       paddingRight: 12,
     },
+    storeActions: {
+      alignItems: 'flex-end',
+      gap: 8,
+    },
     visitButton: {
       paddingHorizontal: 14,
       paddingVertical: 10,
@@ -1085,13 +1268,36 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) =>
       fontWeight: '700',
       color: colors.background,
     },
-    visitRow: {
-      paddingVertical: 14,
-      borderTopWidth: StyleSheet.hairlineWidth,
-      borderTopColor: colors.borderDefault,
+    storeGhostButton: {
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderRadius: 12,
+      backgroundColor: colors.backgroundSoft,
     },
-    visitInfo: {
+    storeGhostText: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: colors.textSecondary,
+    },
+    visitSummaryCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 14,
+      paddingHorizontal: 12,
+      borderRadius: 16,
+      backgroundColor: colors.background,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.borderDefault,
+      marginTop: 10,
+    },
+    visitSummaryCopy: {
       flex: 1,
+      paddingRight: 12,
+    },
+    visitSummaryAction: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: colors.brandPrimary,
     },
     emptyHint: {
       marginTop: 8,

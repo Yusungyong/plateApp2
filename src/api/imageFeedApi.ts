@@ -3,8 +3,10 @@ import api from './axiosInstance';
 import { getGuestParams } from './guestParams';
 
 export type ImageFeedViewerImageItem = {
+  imageId?: number | null;
   orderNo: number;
   fileName: string;
+  thumbnailUrl?: string | null;
 };
 
 export type ImageFeedViewerResponse = {
@@ -19,6 +21,8 @@ export type ImageFeedViewerResponse = {
   storeName: string | null;
   location: string | null;
   placeId: string | null;
+  lat?: number | null;
+  lng?: number | null;
 
   thumbnail: string | null;
 
@@ -42,6 +46,8 @@ export type ImageFeedGroupItem = {
   placeId?: string | null;
   storeName?: string | null;
   address?: string | null;
+  lat?: number | null;
+  lng?: number | null;
   thumbnail?: string | null;
   imageCount?: number | null;
   latestFeedId?: number | null;
@@ -79,6 +85,42 @@ export type ApiResponse<T> = {
   timestamp?: string | null;
 };
 
+const toOptionalNumber = (value: unknown): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+};
+
+const normalizeImageFeedViewerResponse = (
+  data: ImageFeedViewerResponse,
+): ImageFeedViewerResponse => ({
+  ...data,
+  lat: toOptionalNumber((data as any)?.lat),
+  lng: toOptionalNumber((data as any)?.lng),
+});
+
+const normalizeImageFeedGroupItem = (item: ImageFeedGroupItem): ImageFeedGroupItem => ({
+  ...item,
+  lat: toOptionalNumber((item as any)?.lat),
+  lng: toOptionalNumber((item as any)?.lng),
+});
+
+const normalizeImageFeedGroupListResponse = (
+  data: ImageFeedGroupListResponse,
+): ImageFeedGroupListResponse => ({
+  ...data,
+  items: Array.isArray(data.items)
+    ? data.items.map((item) => normalizeImageFeedGroupItem(item))
+    : [],
+});
+
 export async function fetchImageFeedViewer(feedId: number) {
   const guestParams = await getGuestParams();
   const res = await api.get(`/api/image-feeds/${feedId}`, { params: guestParams });
@@ -87,7 +129,7 @@ export async function fetchImageFeedViewer(feedId: number) {
     payload && typeof payload === 'object' && 'data' in payload
       ? (payload as ApiResponse<ImageFeedViewerResponse>).data
       : (payload as ImageFeedViewerResponse);
-  return data;
+  return normalizeImageFeedViewerResponse(data);
 }
 
 // ✅ 추가: 주변 피드ID 스트립
@@ -127,7 +169,7 @@ export async function fetchImageFeedGroups(params?: {
     payload && typeof payload === 'object' && 'data' in payload
       ? (payload as ApiResponse<ImageFeedGroupListResponse>).data
       : (payload as ImageFeedGroupListResponse);
-  return data;
+  return normalizeImageFeedGroupListResponse(data);
 }
 
 export async function fetchImageFeedGroupImages(
@@ -151,6 +193,8 @@ export type ImageFeedPayload = {
   address: string;
   storeName?: string;
   placeId?: string;
+  lat?: number;
+  lng?: number;
   withFriends?: string;
   imageUrls: string[];
 };
@@ -174,6 +218,35 @@ export const deleteImageFeed = async (feedId: number) => {
 
 export const addImageFeedImages = async (feedId: number, payload: FormData) => {
   const res = await api.post(`/api/image-feeds/${feedId}/images`, payload, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  return res.data;
+};
+
+export const deleteImageFeedImage = async (feedId: number, imageId: number) => {
+  const res = await api.delete(`/api/image-feeds/${feedId}/images/${imageId}`);
+  return res.data;
+};
+
+export const reorderImageFeedImages = async (feedId: number, imageIds: number[]) => {
+  const res = await api.patch(`/api/image-feeds/${feedId}/images/order`, {
+    imageIds,
+  });
+  return res.data;
+};
+
+export const replaceImageFeedImage = async (
+  feedId: number,
+  imageId: number,
+  file: {
+    uri: string;
+    name: string;
+    type: string;
+  },
+) => {
+  const body = new FormData();
+  body.append('file', file as unknown as Blob);
+  const res = await api.put(`/api/image-feeds/${feedId}/images/${imageId}`, body, {
     headers: { 'Content-Type': 'multipart/form-data' },
   });
   return res.data;

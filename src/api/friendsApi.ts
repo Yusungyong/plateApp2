@@ -48,6 +48,8 @@ type ApiResponse<T> = {
   items?: T;
 };
 
+const friendCountInFlight = new Map<string, Promise<number>>();
+
 const extractList = <T>(payload?: ApiResponse<T[]> | T[]): T[] => {
   if (!payload) return [];
   if (Array.isArray(payload)) return payload;
@@ -105,6 +107,22 @@ const fetchFriendEntries = async (username: string): Promise<FriendApiItem[]> =>
     params: { username },
   });
   return extractList<FriendApiItem>(response.data);
+};
+
+export const fetchAcceptedFriendCount = async (username: string): Promise<number> => {
+  const inFlight = friendCountInFlight.get(username);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const request = fetchFriendEntries(username)
+    .then((list) => list.filter((item) => matchesStatus(item.status, 'accepted')).length)
+    .finally(() => {
+      friendCountInFlight.delete(username);
+    });
+
+  friendCountInFlight.set(username, request);
+  return request;
 };
 
 export const fetchFriends = async (username: string): Promise<FriendProfile[]> => {

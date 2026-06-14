@@ -2,14 +2,46 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import type { LatLng, Region } from 'react-native-maps';
 import { fetchNearbyStoreMarkers, type NearbyStoreMarker } from '../../../api/mapStoreApi';
-import { createLogger } from '../../../utils/logger';
 
 let lastNearbyMarkersCache: NearbyStoreMarker[] = [];
 let lastNearbyCenterCache: LatLng | null = null;
 let lastNearbyUpdatedAt = 0;
+let hasNearbySnapshot = false;
 
 const STALE_CACHE_MS = 3 * 60 * 1000;
-const logger = createLogger('[useNearbyMarkers]');
+
+const markerIdentity = (marker: NearbyStoreMarker) =>
+  [
+    marker.storeId ?? '',
+    marker.placeId ?? '',
+    marker.category ?? '',
+    marker.lat.toFixed(6),
+    marker.lng.toFixed(6),
+    marker.feedCount ?? 0,
+    marker.thumbnail ?? '',
+    marker.contentType ?? '',
+    marker.imageFeedId ?? '',
+  ].join('|');
+
+const areMarkerListsEqual = (
+  previous: NearbyStoreMarker[],
+  next: NearbyStoreMarker[],
+) => {
+  if (previous === next) {
+    return true;
+  }
+  if (previous.length !== next.length) {
+    return false;
+  }
+
+  for (let index = 0; index < previous.length; index += 1) {
+    if (markerIdentity(previous[index]) !== markerIdentity(next[index])) {
+      return false;
+    }
+  }
+
+  return true;
+};
 
 type MarkerFilterOptions = {
   radiusMeters?: number;
@@ -32,6 +64,7 @@ export const useNearbyMarkers = (
   const lastRequestCenterRef = useRef<LatLng | null>(null);
   const requestSeqRef = useRef(0);
   const lastFilterKeyRef = useRef<string>('');
+  const lastHandledRetryTokenRef = useRef(0);
   const [retryToken, setRetryToken] = useState(0);
 
   const distanceMeters = (a: LatLng, b: LatLng) => {
@@ -76,6 +109,10 @@ export const useNearbyMarkers = (
     [options?.category, options?.tags],
   );
 
+  const commitMarkers = useCallback((incoming: NearbyStoreMarker[]) => {
+    setMarkers((prev) => (areMarkerListsEqual(prev, incoming) ? prev : incoming));
+  }, []);
+
   const retry = useCallback(() => {
     lastRequestTsRef.current = 0;
     setRetryToken((prev) => prev + 1);
@@ -89,11 +126,17 @@ export const useNearbyMarkers = (
       return;
     }
 
+    const forceRefresh = retryToken !== lastHandledRetryTokenRef.current;
+    if (forceRefresh) {
+      lastHandledRetryTokenRef.current = retryToken;
+    }
+
     if (lastFilterKeyRef.current !== filterKey) {
       lastFilterKeyRef.current = filterKey;
       lastNearbyMarkersCache = [];
       lastNearbyCenterCache = null;
       lastNearbyUpdatedAt = 0;
+      hasNearbySnapshot = false;
       previousRegionRef.current = null;
       lastRequestTsRef.current = 0;
       setLoading(false);
@@ -107,6 +150,7 @@ export const useNearbyMarkers = (
         lastNearbyMarkersCache = [];
         lastNearbyCenterCache = null;
         lastNearbyUpdatedAt = 0;
+        hasNearbySnapshot = false;
         setMarkers([]);
       }
       return;
@@ -131,6 +175,26 @@ export const useNearbyMarkers = (
     })();
 
     if (shouldRequest) {
+      const cacheFresh =
+        hasNearbySnapshot &&
+        lastNearbyCenterCache &&
+        Date.now() - lastNearbyUpdatedAt <= STALE_CACHE_MS;
+      if (cacheFresh && !forceRefresh) {
+        const cachedCenter = lastNearbyCenterCache;
+        if (!cachedCenter) {
+          return undefined;
+        }
+        const distanceFromCache = distanceMeters(cachedCenter, region);
+        const reuseDistance = interactive
+          ? Math.max(Math.min(radiusMeters * 0.2, 240), 120)
+          : Math.max(Math.min(radiusMeters * 0.25, 360), 180);
+        if (distanceFromCache <= reuseDistance) {
+          commitMarkers(lastNearbyMarkersCache);
+          setLoading(false);
+          setError(null);
+          return;
+        }
+      }
       const now = Date.now();
       const cooldownMs = interactive ? 1200 : 8000;
       const lastRequestCenter = lastRequestCenterRef.current;
@@ -143,17 +207,6 @@ export const useNearbyMarkers = (
       if (now - lastRequestTsRef.current < cooldownMs && !bypassCooldown) {
         return undefined;
       }
-      if (bypassCooldown) {
-        logger.debug('bypassing nearby marker cooldown for location jump', {
-          centerDriftMeters,
-          radiusMeters,
-          previousCenter: lastRequestCenter,
-          nextCenter: {
-            latitude: region.latitude,
-            longitude: region.longitude,
-          },
-        });
-      }
       lastRequestTsRef.current = now;
       requestSeqRef.current += 1;
       const requestSeq = requestSeqRef.current;
@@ -164,28 +217,14 @@ export const useNearbyMarkers = (
             setLoading(false);
             return;
           }
-          logger.debug('fetched nearby markers', {
-            center: {
-              latitude: region.latitude,
-              longitude: region.longitude,
-            },
-            radiusMeters,
-            total: items.length,
-            items: items.slice(0, 6).map((item) => ({
-              storeId: item.storeId,
-              placeId: item.placeId,
-              storeName: item.storeName,
-              thumbnail: item.thumbnail,
-              contentType: item.contentType,
-              feedCount: item.feedCount,
-              lat: item.lat,
-              lng: item.lng,
-            })),
-          });
           setError(null);
           if (items.length > 0) {
-            setMarkers(items);
-            lastNearbyMarkersCache = items;
+            const nextItems = areMarkerListsEqual(lastNearbyMarkersCache, items)
+              ? lastNearbyMarkersCache
+              : items;
+            commitMarkers(nextItems);
+            hasNearbySnapshot = true;
+            lastNearbyMarkersCache = nextItems;
             lastNearbyCenterCache = {
               latitude: region.latitude,
               longitude: region.longitude,
@@ -194,15 +233,33 @@ export const useNearbyMarkers = (
             setLoading(false);
             return;
           }
-          const cacheFresh = Date.now() - lastNearbyUpdatedAt <= STALE_CACHE_MS;
-          if (lastNearbyMarkersCache.length > 0 && lastNearbyCenterCache && cacheFresh) {
+          const recentCacheStillFresh = Date.now() - lastNearbyUpdatedAt <= STALE_CACHE_MS;
+          if (
+            lastNearbyMarkersCache.length > 0 &&
+            lastNearbyCenterCache &&
+            recentCacheStillFresh
+          ) {
             const distanceFromCache = distanceMeters(lastNearbyCenterCache, region);
             const keepCached = distanceFromCache <= radiusMeters * 0.6;
-            setMarkers(keepCached ? lastNearbyMarkersCache : []);
+            commitMarkers(keepCached ? lastNearbyMarkersCache : []);
+            hasNearbySnapshot = true;
+            lastNearbyMarkersCache = keepCached ? lastNearbyMarkersCache : [];
+            lastNearbyCenterCache = {
+              latitude: region.latitude,
+              longitude: region.longitude,
+            };
+            lastNearbyUpdatedAt = Date.now();
             setLoading(false);
             return;
           }
-          setMarkers([]);
+          hasNearbySnapshot = true;
+          lastNearbyMarkersCache = [];
+          lastNearbyCenterCache = {
+            latitude: region.latitude,
+            longitude: region.longitude,
+          };
+          lastNearbyUpdatedAt = Date.now();
+          commitMarkers([]);
           setLoading(false);
         })
         .catch(() => {
@@ -210,21 +267,12 @@ export const useNearbyMarkers = (
             setLoading(false);
             return;
           }
-          logger.warn('failed to fetch nearby markers', {
-            center: {
-              latitude: region.latitude,
-              longitude: region.longitude,
-            },
-            radiusMeters,
-            interactive,
-            filterKey,
-          });
           setError('주변 가게를 불러오지 못했어요.');
-          const cacheFresh = Date.now() - lastNearbyUpdatedAt <= STALE_CACHE_MS;
-          if (lastNearbyMarkersCache.length > 0 && cacheFresh) {
-            setMarkers(lastNearbyMarkersCache);
+          const recentCacheStillFresh = Date.now() - lastNearbyUpdatedAt <= STALE_CACHE_MS;
+          if (lastNearbyMarkersCache.length > 0 && recentCacheStillFresh) {
+            commitMarkers(lastNearbyMarkersCache);
           } else {
-            setMarkers([]);
+            commitMarkers([]);
           }
           setLoading(false);
         });
@@ -242,6 +290,7 @@ export const useNearbyMarkers = (
     options?.enabled,
     radiusMeters,
     region,
+    commitMarkers,
     requestMarkers,
     retryToken,
   ]);

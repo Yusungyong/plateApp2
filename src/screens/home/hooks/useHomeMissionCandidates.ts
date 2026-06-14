@@ -11,7 +11,7 @@ interface User {
 }
 
 type HomeMissionQuery = {
-  sortType: HomeSortType;
+  sortType: Extract<HomeSortType, 'RECENT' | 'NEARBY'>;
   location?: LatLng | null;
 };
 

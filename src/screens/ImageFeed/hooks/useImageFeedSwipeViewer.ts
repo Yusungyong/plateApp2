@@ -20,13 +20,26 @@ export function useImageFeedSwipeViewer(
 
   // ✅ 캐시 + 로딩 상태
   const cacheRef = useRef<Map<number, ImageFeedViewerResponse>>(new Map());
+  const [pageDataById, setPageDataById] = useState<Map<number, ImageFeedViewerResponse>>(
+    () => new Map(),
+  );
   const loadingRef = useRef<Set<number>>(new Set());
-  const [tick, setTick] = useState(0);
-  const bump = useCallback(() => setTick((v) => v + 1), []);
 
   // ✅ 피드별 이미지 인덱스 기억
   const imageIndexByFeedId = useRef<Map<number, number>>(new Map());
   const [activeImageIndex, setActiveImageIndex] = useState(0);
+
+  const setCachedFeedData = useCallback((id: number, data: ImageFeedViewerResponse) => {
+    setPageDataById((prev) => {
+      if (prev.get(id) === data) {
+        return prev;
+      }
+      const next = new Map(prev);
+      next.set(id, data);
+      cacheRef.current = next;
+      return next;
+    });
+  }, []);
 
   const ensureFeedData = useCallback(
     async (id: number) => {
@@ -39,14 +52,13 @@ export function useImageFeedSwipeViewer(
 
       try {
         const res = await fetchImageFeedViewer(id);
-        cacheRef.current.set(id, res);
-        bump();
-      } catch (e: any) {
+        setCachedFeedData(id, res);
+      } catch {
       } finally {
         loadingRef.current.delete(id);
       }
     },
-    [bump, enabled],
+    [enabled, setCachedFeedData],
   );
 
   // ✅ context 로딩
@@ -129,16 +141,8 @@ export function useImageFeedSwipeViewer(
 
   const activeFeedId = feedIds[feedIndex];
   const activeData = useMemo(
-    () => (activeFeedId ? cacheRef.current.get(activeFeedId) ?? null : null),
-    [activeFeedId, tick],
-  );
-
-  const getPageData = useCallback(
-    (id: number) => {
-      void tick;
-      return cacheRef.current.get(id) ?? null;
-    },
-    [tick],
+    () => (activeFeedId ? pageDataById.get(activeFeedId) ?? null : null),
+    [activeFeedId, pageDataById],
   );
 
   const getSavedImageIndex = useCallback((id: number) => imageIndexByFeedId.current.get(id) ?? 0, []);
@@ -170,9 +174,17 @@ export function useImageFeedSwipeViewer(
 
   const removeFeedId = useCallback((id: number) => {
     if (!id) return;
-    cacheRef.current.delete(id);
     imageIndexByFeedId.current.delete(id);
     loadingRef.current.delete(id);
+    setPageDataById((prev) => {
+      if (!prev.has(id)) {
+        return prev;
+      }
+      const next = new Map(prev);
+      next.delete(id);
+      cacheRef.current = next;
+      return next;
+    });
 
     setFeedIds((prev) => {
       const next = prev.filter((fid) => fid !== id);
@@ -187,8 +199,7 @@ export function useImageFeedSwipeViewer(
       }
       return next;
     });
-    bump();
-  }, [bump, ensureFeedData, feedIndex]);
+  }, [ensureFeedData, feedIndex]);
 
   return {
     // state
@@ -204,9 +215,7 @@ export function useImageFeedSwipeViewer(
     setActiveImageIndex,
 
     // cache controls
-    tick,
-    getPageData,
-    ensureFeedData,
+    pageDataById,
 
     // image index memory
     getSavedImageIndex,

@@ -7,7 +7,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import AppLayout from '../../../components/layout/AppLayout';
 import type { RootStackParamList } from '../../../navigation/MainNavigation';
 import { useAuth } from '../../../auth/AuthProvider';
-import { updateUserPrivacy } from '../../../api/userApi';
+import { updateMyUserProfile } from '../../../api/userApi';
 import { logProfileHistory } from '../../../utils/profileHistoryLogger';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -16,7 +16,7 @@ type Route = RouteProp<RootStackParamList, 'EditPrivacy'>;
 const PrivacyEditScreen: React.FC = () => {
   const navigation = useNavigation<Nav>();
   const route = useRoute<Route>();
-  const { user } = useAuth();
+  const { user, patchUser, refreshUser } = useAuth();
   const initialPrivateRef = useRef(route.params?.initialValue ?? user?.isPrivate ?? false);
   const [isPrivate, setIsPrivate] = useState(!!initialPrivateRef.current);
   const [saving, setSaving] = useState(false);
@@ -28,7 +28,12 @@ const PrivacyEditScreen: React.FC = () => {
     }
     try {
       setSaving(true);
-      await updateUserPrivacy(user.username, isPrivate);
+      await updateMyUserProfile({ isPrivate });
+      try {
+        await refreshUser();
+      } catch {
+        patchUser({ isPrivate });
+      }
       await logProfileHistory(user.username, {
         changeType: 'PRIVACY',
         before: { isPrivate: initialPrivateRef.current },
@@ -36,7 +41,7 @@ const PrivacyEditScreen: React.FC = () => {
         memo: 'PrivacyEditScreen',
       });
       navigation.goBack();
-    } catch (e) {
+    } catch {
       Alert.alert('실패', '공개 설정을 저장하지 못했어요.');
     } finally {
       setSaving(false);
@@ -52,7 +57,7 @@ const PrivacyEditScreen: React.FC = () => {
     >
       <View style={styles.container}>
         <View style={styles.row}>
-          <View style={{ flex: 1 }}>
+          <View style={styles.rowBody}>
             <Text style={styles.title}>비공개 계정</Text>
             <Text style={styles.caption}>비공개 시 승인된 사용자만 타임라인을 볼 수 있어요.</Text>
           </View>
@@ -79,6 +84,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 20,
+  },
+  rowBody: {
+    flex: 1,
   },
   title: { fontSize: 16, fontWeight: '700', color: '#111' },
   caption: { fontSize: 13, color: '#6f7782', marginTop: 4 },

@@ -91,8 +91,8 @@ android {
         applicationId "com.plateappnew"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 8
-        versionName "1.0.7"
+        versionCode 18
+        versionName "2.0.5"
         manifestPlaceholders = [
             googleMapsApiKey: project.env.get("GOOGLE_MAPS_API_KEY")
                 ?: project.env.get("GEOCODING_API_KEY")
@@ -132,6 +132,7 @@ android {
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
+    implementation project(':react-native-image-resizer')
     implementation project(':react-native-maps')
     implementation("com.google.android.gms:play-services-base:18.5.0")
     implementation("com.google.android.gms:play-services-maps:19.1.0")

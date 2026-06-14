@@ -16,10 +16,14 @@ const SignupScreenContainer: React.FC<SignupScreenContainerProps> = ({ navigatio
     id,
     password,
     nickname,
+    agreePrivacy: _agreePrivacy,
+    agreeService: _agreeService,
   }: {
     id: string;
-    password: string;
+    password?: string;
     nickname: string;
+    agreeService: boolean;
+    agreePrivacy: boolean;
   }) => {
     try {
       // 서버에서 email로 받으니까 필드 이름 맞춰서 전송

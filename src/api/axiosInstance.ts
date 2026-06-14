@@ -2,7 +2,6 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import Config from 'react-native-config';
 import { getTokens, saveTokens, clearTokens } from '../auth/tokenStorage';
-import { createLogger } from '../utils/logger';
 import { getApiBaseUrl } from '../config/devProxy';
 
 const RAW_BASE_URL = (Config as any).SERVER_API_URL || '';
@@ -12,7 +11,6 @@ const api = axios.create({
   baseURL: BASE_URL,
   timeout: 15000,
 });
-const logger = createLogger('[api]');
 
 let authFailureHandler: (() => void | Promise<void>) | null = null;
 
@@ -27,6 +25,25 @@ const notifyAuthFailure = async () => {
   try {
     await authFailureHandler();
   } catch {}
+};
+
+const RATE_LIMIT_MESSAGE = '요청이 너무 많아요. 잠시 후 다시 시도해주세요.';
+
+const normalizeRateLimitError = (error: AxiosError) => {
+  if (error.response?.status !== 429) {
+    return;
+  }
+
+  const data = error.response.data as any;
+  if (data && typeof data === 'object') {
+    if (!data.message) {
+      data.message = RATE_LIMIT_MESSAGE;
+    }
+    if (!data.errorCode) {
+      data.errorCode = 'COMMON_429';
+    }
+  }
+  error.message = data?.message ?? RATE_LIMIT_MESSAGE;
 };
 
 // ✅ auth 계열은 토큰을 붙이지 않는다 (안전하게 넓게 잡는 버전)
@@ -44,25 +61,6 @@ const isPublicAuthEndpoint = (url?: string) => {
   );
 };
 
-const isTracedEndpoint = (url?: string) => {
-  if (!url) return false;
-
-  const path = url.startsWith('http') ? url.replace(RAW_BASE_URL, '').replace(BASE_URL, '') : url;
-  return (
-    path.startsWith('/api/home/') ||
-    path.startsWith('/api/map/')
-  );
-};
-
-const summarizeRequest = (config: InternalAxiosRequestConfig | undefined) => ({
-  method: config?.method?.toUpperCase() ?? 'GET',
-  baseURL: config?.baseURL ?? BASE_URL,
-  url: config?.url ?? '',
-  timeout: config?.timeout,
-  params: config?.params ?? null,
-  hasAuthHeader: Boolean((config?.headers as any)?.Authorization),
-});
-
 api.interceptors.request.use(async (config: InternalAxiosRequestConfig) => {
   const url = config.url;
   if (isPublicAuthEndpoint(url)) {
@@ -78,10 +76,6 @@ api.interceptors.request.use(async (config: InternalAxiosRequestConfig) => {
     (config.headers as any).Authorization = `Bearer ${tokens.accessToken}`;
   }
 
-  if (isTracedEndpoint(url)) {
-    logger.debug('request', summarizeRequest(config));
-  }
-
   return config;
 });
 
@@ -89,6 +83,14 @@ const refreshClient = axios.create({
   baseURL: BASE_URL,
   timeout: 15000,
 });
+
+refreshClient.interceptors.response.use(
+  response => response,
+  (error: AxiosError) => {
+    normalizeRateLimitError(error);
+    return Promise.reject(error);
+  },
+);
 
 let refreshPromise: Promise<{ accessToken: string; refreshToken: string }> | null = null;
 
@@ -142,29 +144,12 @@ const startRefresh = async () => {
 };
 
 api.interceptors.response.use(
-  response => {
-    if (isTracedEndpoint(response.config?.url)) {
-      logger.debug('response', {
-        ...summarizeRequest(response.config),
-        status: response.status,
-        responseDataType: typeof response.data,
-      });
-    }
-    return response;
-  },
+  response => response,
   async (error: AxiosError) => {
+    normalizeRateLimitError(error);
+
     const originalRequest: any = error.config;
     if (!originalRequest) return Promise.reject(error);
-
-    if (isTracedEndpoint(originalRequest.url)) {
-      logger.warn('response error', {
-        ...summarizeRequest(originalRequest),
-        code: error.code ?? null,
-        message: error.message,
-        status: error.response?.status ?? null,
-        responseData: error.response?.data ?? null,
-      });
-    }
 
     const status = error.response?.status;
     const url = originalRequest.url as string | undefined;

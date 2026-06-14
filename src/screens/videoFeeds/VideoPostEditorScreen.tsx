@@ -212,26 +212,35 @@ const VideoPostEditorScreen: React.FC = () => {
 
           await updateVideoPostWithFile(editingStoreId, body);
         } else {
+          const geocodeResult = await geocodeAddress(form.address);
+          if (!geocodeResult) {
+            Alert.alert('주소 확인 필요', '주소를 찾을 수 없습니다. 주소를 다시 확인해 주세요.');
+            return;
+          }
+
           const payload: Partial<{
             title: string;
             storeName: string;
             placeId: string;
             address: string;
+            lat: number;
+            lng: number;
             description: string;
             withFriends: string;
           }> = {};
 
           const title = form.title.trim();
           const storeName = form.storeName.trim();
-          const placeId = form.placeId.trim();
-          const address = form.address.trim();
           const description = form.description.trim();
           const withFriends = form.withFriends.trim();
+          const finalStoreName = storeName || form.address?.trim() || '';
 
           if (title) payload.title = title;
-          if (storeName) payload.storeName = storeName;
-          if (placeId) payload.placeId = placeId;
-          if (address) payload.address = address;
+          if (finalStoreName) payload.storeName = finalStoreName;
+          payload.placeId = geocodeResult.placeId;
+          payload.address = geocodeResult.formattedAddress;
+          payload.lat = geocodeResult.lat;
+          payload.lng = geocodeResult.lng;
           if (description) payload.description = description;
           if (withFriends) payload.withFriends = withFriends;
 

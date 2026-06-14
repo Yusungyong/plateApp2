@@ -8,6 +8,7 @@ import { useProfileNavigation } from '../../../hooks/useProfileNavigation';
 import { useRequireLogin } from '../../../hooks/useRequireLogin';
 
 const ICON_SIZE = 34;
+const ACTION_HIT_SLOP = { top: 14, bottom: 14, left: 14, right: 14 };
 const TOP_BASE = Platform.OS === 'android' ? 12 : 52;
 const BACK_BUTTON_HEIGHT = 44;
 const TOP_GAP = 8;
@@ -84,24 +85,34 @@ export default function ViewerOverlays({
       </View>
 
       {(location || storeName) && (
-        <View pointerEvents="none" style={[styles.topChipContainer, { top: TOP_CHIP_TOP }]}>
+        <View pointerEvents="box-none" style={[styles.topChipContainer, { top: TOP_CHIP_TOP }]}>
           <View style={styles.topChipStack}>
             {location ? (
-              <View style={styles.topChip}>
+              <TouchableOpacity
+                style={styles.topChip}
+                activeOpacity={onPressLocation ? 0.82 : 1}
+                disabled={!onPressLocation}
+                onPress={onPressLocation}
+              >
                 <Icon name="location-outline" size={16} color="#fff" />
                 <Text style={styles.topChipText} numberOfLines={1}>
                   {location}
                 </Text>
-              </View>
+              </TouchableOpacity>
             ) : null}
 
             {storeName ? (
-              <View style={[styles.topChip, styles.topChipSecondary]}>
+              <TouchableOpacity
+                style={[styles.topChip, styles.topChipSecondary]}
+                activeOpacity={onPressLocation ? 0.82 : 1}
+                disabled={!onPressLocation}
+                onPress={onPressLocation}
+              >
                 <Icon name="restaurant-outline" size={16} color="#fff" />
                 <Text style={styles.topChipText} numberOfLines={1}>
                   {storeName}
                 </Text>
-              </View>
+              </TouchableOpacity>
             ) : null}
           </View>
         </View>
@@ -111,32 +122,37 @@ export default function ViewerOverlays({
       {showActions && activeData && (
         <View style={styles.rightContainer} pointerEvents="box-none">
           <View style={styles.stack}>
-            <TouchableOpacity
-              style={styles.item}
-              onPress={() => {
-                if (!requireLogin({ message: '좋아요는 로그인 후 사용할 수 있어요.' })) return;
-                onToggleLike();
-              }}
-            >
-              <Icon
-                name={meta.isLiked ? 'heart' : 'heart-outline'}
-                size={ICON_SIZE}
-                color={meta.isLiked ? '#ff4d4f' : '#fff'}
-              />
+            <View style={styles.item}>
               <TouchableOpacity
+                style={styles.iconTouch}
+                onPress={() => {
+                  if (!requireLogin({ message: '좋아요는 로그인 후 사용할 수 있어요.' })) return;
+                  onToggleLike();
+                }}
+                hitSlop={ACTION_HIT_SLOP}
+                activeOpacity={0.8}
+              >
+                <Icon
+                  name={meta.isLiked ? 'heart' : 'heart-outline'}
+                  size={ICON_SIZE}
+                  color={meta.isLiked ? '#ff4d4f' : '#fff'}
+                />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.countTouch}
                 onPress={() => {
                   if (!requireLogin({ message: '좋아요 목록은 로그인 후 볼 수 있어요.' })) {
                     return;
                   }
                   onPressLikeCount?.();
                 }}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                hitSlop={ACTION_HIT_SLOP}
                 activeOpacity={onPressLikeCount ? 0.7 : 1}
                 disabled={!onPressLikeCount}
               >
                 <Text style={styles.count}>{meta.likeCount}</Text>
               </TouchableOpacity>
-            </TouchableOpacity>
+            </View>
 
             <TouchableOpacity
               style={styles.item}
@@ -202,7 +218,7 @@ export default function ViewerOverlays({
               <View style={[styles.avatar, styles.avatarPlaceholder]} />
             )}
 
-            <View style={{ flex: 1 }}>
+            <View style={styles.userTextWrap}>
               <Text style={styles.userLine} numberOfLines={1}>
                 {activeData.nickName ?? activeData.username}
               </Text>
@@ -274,8 +290,20 @@ const styles = StyleSheet.create({
   },
   item: {
     alignItems: 'center',
+    minWidth: 56,
     paddingVertical: 4,
-    paddingHorizontal: 2,
+    paddingHorizontal: 4,
+  },
+  iconTouch: {
+    minWidth: 56,
+    minHeight: 46,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  countTouch: {
+    minWidth: 56,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   count: {
     marginTop: 6,
@@ -298,6 +326,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
     marginTop: 12,
+  },
+  userTextWrap: {
+    flex: 1,
   },
   avatar: {
     width: 42,

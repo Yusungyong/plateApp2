@@ -2,23 +2,53 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchVideoFeed, VideoFeedItem } from '../../../api/videoFeedApi';
 
 type Params = {
-  username: string;
   initialStoreId: number;
   initialPlaceId: string;
   seedItems?: VideoFeedItem[];
   seedIndex?: number;
   disableLoadMore?: boolean;
+  onHydrated?: (result: { videos: VideoFeedItem[]; startIndex: number }) => void;
 };
 
 const keyOf = (v: VideoFeedItem) => `${v.storeId}_${v.placeId}`;
 
+const mergeVideoLists = (base: VideoFeedItem[], incoming: VideoFeedItem[]) => {
+  if (!base.length) {
+    return incoming;
+  }
+  if (!incoming.length) {
+    return base;
+  }
+
+  const incomingByKey = new Map(incoming.map(item => [keyOf(item), item]));
+  const seen = new Set<string>();
+
+  const merged = base.map(item => {
+    const itemKey = keyOf(item);
+    seen.add(itemKey);
+    const fresh = incomingByKey.get(itemKey);
+    return fresh ? { ...item, ...fresh } : item;
+  });
+
+  incoming.forEach(item => {
+    const itemKey = keyOf(item);
+    if (seen.has(itemKey)) {
+      return;
+    }
+    seen.add(itemKey);
+    merged.push(item);
+  });
+
+  return merged;
+};
+
 export const useVideoFeedData = ({
-  username,
   initialStoreId,
   initialPlaceId,
   seedItems,
   seedIndex,
   disableLoadMore,
+  onHydrated,
 }: Params) => {
   const [videos, setVideos] = useState<VideoFeedItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -33,6 +63,7 @@ export const useVideoFeedData = ({
   // loadMore 잠금
   const loadingMoreRef = useRef(false);
   const lastLoadMoreKeyRef = useRef<string | null>(null);
+  const hydrateRequestRef = useRef(0);
 
   const appendDeduped = useCallback((more: VideoFeedItem[]) => {
     if (!more?.length) return;
@@ -57,7 +88,6 @@ export const useVideoFeedData = ({
 
       try {
         const more = await fetchVideoFeed({
-          username,
           placeId: placeIdForNext,
           storeId: storeIdForNext,
         });
@@ -69,7 +99,7 @@ export const useVideoFeedData = ({
         setLoadingMore(false);
       }
     },
-    [appendDeduped, username],
+    [appendDeduped],
   );
 
   const maybeTriggerLoadMore = useCallback(
@@ -92,13 +122,14 @@ export const useVideoFeedData = ({
     try {
       setLoading(true);
       setErrorMsg(null);
+      const requestId = ++hydrateRequestRef.current;
 
       // 초기 로딩 시 잠금 리셋
       loadingMoreRef.current = false;
       lastLoadMoreKeyRef.current = null;
 
       if (seedItems && seedItems.length > 0) {
-        const safe = seedItems;
+        const safe = mergeVideoLists([], seedItems);
         setVideos(safe);
         videosRef.current = safe;
 
@@ -107,11 +138,31 @@ export const useVideoFeedData = ({
             ? Math.max(0, Math.min(seedIndex, safe.length - 1))
             : safe.findIndex(v => v.storeId === initialStoreId);
         const startIndex = idx >= 0 ? idx : 0;
+
+        fetchVideoFeed({
+          storeId: initialStoreId,
+          placeId: initialPlaceId,
+        })
+          .then(fetched => {
+            if (hydrateRequestRef.current !== requestId || !fetched?.length) {
+              return;
+            }
+
+            const fetchedStartIndex = fetched.findIndex(
+              v => v.storeId === initialStoreId && v.placeId === initialPlaceId,
+            );
+            const hydratedStartIndex = fetchedStartIndex >= 0 ? fetchedStartIndex : 0;
+
+            setVideos(fetched);
+            videosRef.current = fetched;
+            onHydrated?.({ videos: fetched, startIndex: hydratedStartIndex });
+          })
+          .catch(() => undefined);
+
         return { videos: safe, startIndex };
       }
 
       const data = await fetchVideoFeed({
-        username,
         storeId: initialStoreId,
         placeId: initialPlaceId,
       });
@@ -132,7 +183,7 @@ export const useVideoFeedData = ({
     } finally {
       setLoading(false);
     }
-  }, [username, initialStoreId, initialPlaceId, seedItems, seedIndex]);
+  }, [initialStoreId, initialPlaceId, onHydrated, seedItems, seedIndex]);
 
   return {
     videos,

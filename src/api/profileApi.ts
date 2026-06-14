@@ -78,15 +78,31 @@ export const updateProfile = async (payload: UpdateProfilePayload): Promise<User
   return response.data;
 };
 
-export const uploadProfileImage = async (imageUri: string): Promise<UploadProfileImageResponse> => {
+export const uploadProfileImage = async (
+  file:
+    | string
+    | {
+        uri: string;
+        name?: string | null;
+        type?: string | null;
+      },
+): Promise<UploadProfileImageResponse> => {
   const formData = new FormData();
+  const normalizedFile =
+    typeof file === 'string'
+      ? {
+          uri: file,
+          name: file.split('/').pop() || 'profile.jpg',
+          type: null,
+        }
+      : file;
 
-  const filename = imageUri.split('/').pop() || 'profile.jpg';
+  const filename = normalizedFile.name?.trim() || normalizedFile.uri.split('/').pop() || 'profile.jpg';
   const match = /\.(\w+)$/.exec(filename);
-  const type = match ? `image/${match[1]}` : 'image/jpeg';
+  const type = normalizedFile.type?.trim() || (match ? `image/${match[1]}` : 'image/jpeg');
 
   formData.append('file', {
-    uri: imageUri,
+    uri: normalizedFile.uri,
     name: filename,
     type,
   } as any);

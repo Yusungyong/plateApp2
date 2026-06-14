@@ -49,7 +49,15 @@ export type RootStackParamList = {
   Recipe: undefined;
   RecipeDetail: { recipeId: number };
   LegalDocument: { documentType: LegalDocumentType };
-  FullScreenMap: undefined;
+  FullScreenMap:
+    | {
+        placeId?: string;
+        storeName?: string;
+        address?: string;
+        lat?: number;
+        lng?: number;
+      }
+    | undefined;
   MyPage: undefined;
   AccountSettings: undefined;
   ProfileEdit: { username?: string } | undefined;
@@ -57,7 +65,11 @@ export type RootStackParamList = {
   MyPosts: { initialTab?: 'video' | 'image' } | undefined;
   ProfileContentGrid: { type: 'video' | 'image' | 'like'; title?: string; username?: string };
   ProfileImageViewer: { uri?: string; title?: string; username?: string };
-  MyFriends: undefined;
+  MyFriends:
+    | {
+        initialTab?: 'discover' | 'requests' | 'friends' | 'activity';
+      }
+    | undefined;
   BlockedUsers: undefined;
   ReportHistory: undefined;
   FriendVisitHistory: {
@@ -98,9 +110,9 @@ export type RootStackParamList = {
   DeleteAccount: undefined;
 
   VideoFeedScreen: {
-    username?: string;
     storeId: number;
     placeId: string;
+    openComments?: boolean;
     context?: 'myPosts';
     contextItems?: VideoFeedItem[];
     contextIndex?: number;
@@ -112,6 +124,7 @@ export type RootStackParamList = {
     groupId?: string;
     groupIds?: string[];
     initialIndex?: number;
+    openComments?: boolean;
   };
   Notification: undefined;
 };

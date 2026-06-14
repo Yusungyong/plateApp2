@@ -20,8 +20,10 @@ import SignupFooter from './components/SignupFooter';
 
 interface SignupFormValues {
   id: string;
-  password: string;
+  password?: string;
   nickname: string;
+  agreeService: boolean;
+  agreePrivacy: boolean;
 }
 
 interface SignupScreenProps {
@@ -29,16 +31,19 @@ interface SignupScreenProps {
   onBackToLoginPress?: () => void;
   onOpenTerms?: () => void;
   onOpenPrivacy?: () => void;
+  mode?: 'default' | 'social';
+  title?: string;
+  initialValues?: Partial<Pick<SignupFormValues, 'id' | 'nickname'>>;
 }
-
-// 0: 약관, 1: 이메일, 2: 비밀번호, 3: 닉네임
-type Step = 0 | 1 | 2 | 3;
 
 const SignupScreen: React.FC<SignupScreenProps> = ({
   onSubmit,
   onBackToLoginPress,
   onOpenTerms,
   onOpenPrivacy,
+  mode = 'default',
+  title = '회원가입',
+  initialValues,
 }) => {
   const { colors, spacing } = useTheme();
   const styles = useMemo(
@@ -46,12 +51,17 @@ const SignupScreen: React.FC<SignupScreenProps> = ({
     [colors, spacing],
   );
   // 1) 상태값들
-  const [step, setStep] = useState<Step>(0);
+  const stepSequence = useMemo(
+    () => (mode === 'social' ? [0, 1, 3] : [0, 1, 2, 3]),
+    [mode],
+  );
+  const [stepIndex, setStepIndex] = useState(0);
+  const step = stepSequence[stepIndex] ?? 0;
 
-  const [id, setId] = useState('');
+  const [id, setId] = useState(initialValues?.id ?? '');
   const [password, setPassword] = useState('');
   const [passwordConfirm, setPasswordConfirm] = useState('');
-  const [nickname, setNickname] = useState('');
+  const [nickname, setNickname] = useState(initialValues?.nickname ?? '');
   const [agreeService, setAgreeService] = useState(false);
   const [agreePrivacy, setAgreePrivacy] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -72,13 +82,13 @@ const SignupScreen: React.FC<SignupScreenProps> = ({
   const fadeAnim = useRef(new Animated.Value(1)).current;
 
   const runStepTransition = useCallback(
-    (nextStep: Step) => {
+    (nextStepIndex: number) => {
       Animated.timing(fadeAnim, {
         toValue: 0,
         duration: 100,
         useNativeDriver: true,
       }).start(() => {
-        setStep(nextStep);
+        setStepIndex(nextStepIndex);
         Animated.timing(fadeAnim, {
           toValue: 1,
           duration: 140,
@@ -90,14 +100,14 @@ const SignupScreen: React.FC<SignupScreenProps> = ({
   );
 
   // 4) 스텝별 진행 가능 여부 (각 스텝의 valid 결과만 사용)
-  const canGoNextByStep: Record<Step, boolean> = {
+  const canGoNextByStep: Record<number, boolean> = {
     0: isTermsValid,
     1: isEmailValid,
     2: isPasswordValid,
     3: isNicknameValid && !submitting,
   };
 
-  const isLastStep = step === 3;
+  const isLastStep = stepIndex === stepSequence.length - 1;
   const canSubmit = isLastStep && canGoNextByStep[3];
 
   // 5) 이벤트 핸들러
@@ -108,24 +118,27 @@ const SignupScreen: React.FC<SignupScreenProps> = ({
       setSubmitting(true);
       await onSubmit({
         id: id.trim(),
-        password,
+        password: mode === 'default' ? password : undefined,
         nickname: nickname.trim(),
+        agreeService,
+        agreePrivacy,
       });
     } finally {
       setSubmitting(false);
     }
-  }, [canSubmit, onSubmit, id, password, nickname]);
+  }, [canSubmit, onSubmit, id, password, nickname, mode, agreeService, agreePrivacy]);
 
   const handleNext = () => {
     if (!canGoNextByStep[step]) return;
 
-    if (step === 3) {
+    if (isLastStep) {
       handleSubmit();
       return;
     }
 
-    const nextStep = (step + 1) as Step;
-    runStepTransition(nextStep);
+    const nextStepIndex = stepIndex + 1;
+    const nextStep = stepSequence[nextStepIndex];
+    runStepTransition(nextStepIndex);
 
     if (nextStep === 1) {
       setTimeout(() => emailInputRef.current?.focus(), 250);
@@ -137,9 +150,8 @@ const SignupScreen: React.FC<SignupScreenProps> = ({
   };
 
   const handlePrev = () => {
-    if (step === 0) return;
-    const prevStep = (step - 1) as Step;
-    runStepTransition(prevStep);
+    if (stepIndex === 0) return;
+    runStepTransition(stepIndex - 1);
   };
 
   const handleToggleService = () => setAgreeService(prev => !prev);
@@ -152,9 +164,12 @@ const SignupScreen: React.FC<SignupScreenProps> = ({
   };
 
   // 6) 단계별 서브 타이틀
-  const stepSubtitleByStep: Record<Step, string> = {
+  const stepSubtitleByStep: Record<number, string> = {
     0: '서비스 이용을 위한 필수 약관에 동의해주세요',
-    1: '로그인에 사용할 이메일 주소를 입력해요',
+    1:
+      mode === 'social'
+        ? '연결할 이메일 주소를 확인하거나 입력해요'
+        : '로그인에 사용할 이메일 주소를 입력해요',
     2: '안전한 식당 기록을 위해 비밀번호를 설정해요',
     3: '앱에서 표시될 이름이에요',
   };
@@ -225,7 +240,9 @@ const SignupScreen: React.FC<SignupScreenProps> = ({
         >
           {/* 상단 타이틀 + 스텝 표시 */}
           <SignupHeader
-            step={step}
+            title={title}
+            step={stepIndex}
+            totalSteps={stepSequence.length}
             subtitle={stepSubtitleByStep[step]}
           />
 

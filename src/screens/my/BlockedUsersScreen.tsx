@@ -84,7 +84,7 @@ const BlockedUsersScreen: React.FC = () => {
                 );
                 Alert.alert('해제 완료', '차단이 해제되었습니다.');
               })
-              .catch((e) => {
+              .catch((_e) => {
                 Alert.alert('실패', '차단 해제에 실패했어요.');
               });
           },

@@ -12,7 +12,6 @@ type MapOverlaysProps = {
   clusterHintOpacity: Animated.Value;
   showLoadingBadge: boolean;
   loadingBadgeOpacity: Animated.Value;
-  markersLoading: boolean;
   markersError?: string | null;
   onRetryMarkers?: () => void;
   showCta: boolean;
@@ -28,7 +27,6 @@ const MapOverlays: React.FC<MapOverlaysProps> = ({
   clusterHintOpacity,
   showLoadingBadge,
   loadingBadgeOpacity,
-  markersLoading,
   markersError,
   onRetryMarkers,
   showCta,
@@ -88,11 +86,6 @@ const MapOverlays: React.FC<MapOverlaysProps> = ({
         <Ionicons name="navigate-circle" size={16} color={HOME_COLORS.ink} />
         <Text style={styles.clusterHintText}>확대 후 목록에서 가게를 선택하세요</Text>
       </Animated.View>
-    )}
-    {markersLoading && showCta && (
-      <View style={styles.loadingOverlay} pointerEvents="auto">
-        <View />
-      </View>
     )}
     {showLoadingBadge && (
       <Animated.View style={[styles.loadingBadge, { opacity: loadingBadgeOpacity }]} pointerEvents="none">
@@ -157,10 +150,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: HOME_COLORS.ink,
     fontWeight: '600',
-  },
-  loadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: HOME_COLORS.overlayFaint,
   },
   applyToast: {
     position: 'absolute',

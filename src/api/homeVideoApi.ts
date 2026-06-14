@@ -1,6 +1,5 @@
 // src/api/homeVideoApi.ts
 import api from './axiosInstance';
-import { getOrCreateGuestId } from '../auth/guestIdStorage';
 import { getGuestParams } from './guestParams';
 
 type HomeSortType = 'RECENT' | 'NEARBY';
@@ -17,6 +16,12 @@ export type HomeVideoThumbnail = {
   storeName: string | null;
   address: string | null;
   placeId: string | null;
+  commentCount?: number | null;
+  likeCount?: number | null;
+  likedByMe?: boolean | null;
+  username?: string | null;
+  nickName?: string | null;
+  profileImageUrl?: string | null;
   createdAt?: string | null;
   updatedAt: string;     // ISO 문자열
 };
@@ -30,30 +35,76 @@ export type PageResponse<T> = {
   number: number;
 };
 
+const normalizeHomeVideoThumbnail = (raw: any): HomeVideoThumbnail => ({
+  storeId: Number(raw?.storeId ?? raw?.store_id ?? 0),
+  title: raw?.title ?? null,
+  fileName: String(raw?.fileName ?? raw?.file_name ?? ''),
+  thumbnail: raw?.thumbnail ?? raw?.thumbnail_url ?? null,
+  videoDuration: raw?.videoDuration ?? raw?.video_duration ?? null,
+  muteYn: raw?.muteYn ?? raw?.mute_yn ?? null,
+  videoSize: raw?.videoSize ?? raw?.video_size ?? null,
+  storeName: raw?.storeName ?? raw?.store_name ?? null,
+  address: raw?.address ?? null,
+  placeId: raw?.placeId ?? raw?.place_id ?? null,
+  commentCount:
+    raw?.commentCount ??
+    raw?.commentsCount ??
+    raw?.comment_count ??
+    raw?.comments_count ??
+    null,
+  likeCount:
+    raw?.likeCount ??
+    raw?.likesCount ??
+    raw?.like_count ??
+    raw?.likes_count ??
+    null,
+  likedByMe:
+    raw?.likedByMe ??
+    raw?.liked_by_me ??
+    raw?.liked ??
+    raw?.isLiked ??
+    null,
+  username:
+    raw?.username ??
+    raw?.userName ??
+    raw?.authorUsername ??
+    raw?.author_username ??
+    raw?.createdBy ??
+    raw?.created_by ??
+    null,
+  nickName:
+    raw?.nickName ??
+    raw?.nick_name ??
+    raw?.nickname ??
+    raw?.displayName ??
+    raw?.authorNickname ??
+    raw?.author_nickname ??
+    raw?.createdByNickname ??
+    raw?.created_by_nickname ??
+    null,
+  profileImageUrl:
+    raw?.profileImageUrl ??
+    raw?.profile_image_url ??
+    raw?.profileImage ??
+    raw?.profile_image ??
+    raw?.authorProfileImageUrl ??
+    raw?.author_profile_image_url ??
+    null,
+  createdAt: raw?.createdAt ?? raw?.created_at ?? null,
+  updatedAt: String(raw?.updatedAt ?? raw?.updated_at ?? ''),
+});
+
 // 홈 썸네일 조회
-// - user 가 있으면: username 기반(로그인 유저)
-// - user 가 없으면: guestId 기반(게스트)
+// - 로그인 사용자는 Authorization 헤더 기준으로 개인화된다.
+// - 토큰이 없으면 guestId 기반(게스트)으로 조회한다.
 export async function fetchHomeVideoThumbnails(
   page = 0,
   size = 10,
-  user?: { username?: string | null } | null,
+  _user?: { username?: string | null } | null,
   options?: { sortType?: HomeSortType; location?: HomeLocation | null; radius?: number },
 ): Promise<PageResponse<HomeVideoThumbnail>> {
-  let params: Record<string, any> = { page, size };
-
-  if (user && user.username) {
-    // 로그인 사용자
-    params.username = user.username;
-    params.isGuest = false;
-  } else {
-    // 게스트 사용자
-    const guestParams = await getGuestParams();
-    params = { ...params, ...guestParams };
-    if (!params.guestId) {
-      params.guestId = await getOrCreateGuestId();
-      params.isGuest = true;
-    }
-  }
+  const guestParams = await getGuestParams();
+  const params: Record<string, any> = { page, size, ...guestParams };
 
   if (options?.sortType) {
     params.sortType = options.sortType;
@@ -70,31 +121,31 @@ export async function fetchHomeVideoThumbnails(
     '/api/home/video-thumbnails',
     { params },
   );
-  return res.data;
+  const responsePage = res.data;
+  return {
+    ...responsePage,
+    content: Array.isArray(responsePage?.content)
+      ? responsePage.content.map(normalizeHomeVideoThumbnail)
+      : [],
+  };
 }
 
 /**
  * 🔹 썸네일 시청 이력 생성
- * - user 가 있으면: username + isGuest=false
- * - user 가 없으면: guestId + isGuest=true
+ * - 로그인 사용자는 Authorization 헤더 기준으로 기록된다.
  */
 export async function createHomeVideoWatchHistory(
   storeId: number,
   user?: { username?: string | null } | null,
 ) {
-  let payload: Record<string, any> = { storeId };
-
-  if (user && user.username) {
-    payload.username = user.username;
-    payload.isGuest = false;
-  } else {
-    const guestParams = await getGuestParams();
-    payload = { ...payload, ...guestParams };
-    if (!payload.guestId) {
-      payload.guestId = await getOrCreateGuestId();
-      payload.isGuest = true;
-    }
+  if (!user?.username) {
+    return;
   }
+
+  const payload: Record<string, any> = {
+    storeId,
+    isGuest: false,
+  };
 
   await api.post('/api/home/video-watch-history', payload);
 }

@@ -69,8 +69,7 @@ const RecipeScreen = () => {
 
   useEffect(() => {
     if (!isFocused || !user?.username) return;
-    const unsubscribe = subscribeNotificationEvents((event) => {
-      if (event.type !== 'message') return;
+    const unsubscribe = subscribeNotificationEvents(() => {
       loadUnreadCount();
     });
     return unsubscribe;

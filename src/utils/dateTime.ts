@@ -47,13 +47,25 @@ export const formatTimeAgo = (value: DateInput): string => {
   if (!date) return '-';
   const diff = Date.now() - date.getTime();
   const sec = Math.max(0, Math.floor(diff / 1000));
-  if (sec < 60) return `${sec}초`;
+  if (sec < 60) return '방금 전';
   const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}분`;
+  if (min < 60) return `${min}분 전`;
   const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}시간`;
+  if (hr < 24) return `${hr}시간 전`;
   const day = Math.floor(hr / 24);
-  return `${day}일`;
+  if (day === 1) return '어제';
+  if (day < 7) return `${day}일 전`;
+
+  const now = new Date();
+  const isSameYear = now.getFullYear() === date.getFullYear();
+  if (isSameYear) {
+    return `${date.getMonth() + 1}월 ${date.getDate()}일`;
+  }
+
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const dateText = `${date.getDate()}`.padStart(2, '0');
+  return `${year}.${month}.${dateText}`;
 };
 
 export const normalizeMs = (value: DateInput): number | null => {

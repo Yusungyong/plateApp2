@@ -140,7 +140,6 @@ const MyLikesScreen: React.FC = () => {
           navigation.navigate('VideoFeedScreen', {
             storeId: item.storeId,
             placeId: item.placeId,
-            username: user?.username,
           })
         }
       >

@@ -11,9 +11,16 @@ type Props = {
   showBack?: boolean;
   showNotification?: boolean;
   notificationCount?: number;
+  headerRight?: React.ReactNode;
+  titleAlign?: 'center' | 'left';
+  titleLeftInset?: number;
+  onPressTitle?: () => void;
+  showTitleChevron?: boolean;
+  headerBorderless?: boolean;
   children: React.ReactNode;
   footer?: React.ReactNode;
   footerHeight?: number;
+  footerMode?: 'docked' | 'overlay';
   onPressBack?: () => void;
   onPressNotification?: () => void;
   onPressFriends?: () => void;
@@ -24,9 +31,16 @@ export default function AppLayout({
   showBack = false,
   showNotification = true,
   notificationCount,
+  headerRight,
+  titleAlign = 'center',
+  titleLeftInset = 12,
+  onPressTitle,
+  showTitleChevron = false,
+  headerBorderless = false,
   children,
   footer,
   footerHeight = 54,
+  footerMode = 'docked',
   onPressBack,
   onPressNotification,
   onPressFriends,
@@ -35,12 +49,15 @@ export default function AppLayout({
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const safeBottom = insets.bottom;
-  const footerContentPaddingBottom = Math.max(safeBottom - 15, 0);
+  const footerContentPaddingBottom =
+    footerMode === 'overlay'
+      ? Math.max(safeBottom - 8, 0)
+      : Math.max(safeBottom - 22, 0);
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, headerBorderless && styles.headerBorderless]}>
         {showBack ? (
           <TouchableOpacity onPress={onPressBack}>
             <Ionicons name="chevron-back" size={24} color={colors.textPrimary} />
@@ -49,9 +66,42 @@ export default function AppLayout({
           <View style={styles.leftPlaceholder} />
         )}
 
-        <Text style={styles.headerTitle}>{title}</Text>
+        {onPressTitle ? (
+          <TouchableOpacity
+            onPress={onPressTitle}
+            activeOpacity={0.8}
+            style={[
+              styles.headerTitleButton,
+              titleAlign === 'left' ? { paddingLeft: titleLeftInset } : null,
+            ]}
+          >
+            <Text style={[styles.headerTitle, styles.headerTitleButtonText]}>
+              {title}
+            </Text>
+            {showTitleChevron ? (
+              <Ionicons
+                name="chevron-down"
+                size={16}
+                color={colors.textPrimary}
+                style={styles.headerTitleChevron}
+              />
+            ) : null}
+          </TouchableOpacity>
+        ) : (
+          <Text
+            style={[
+              styles.headerTitle,
+              titleAlign === 'left' ? styles.headerTitleLeft : null,
+              titleAlign === 'left' ? { paddingLeft: titleLeftInset } : null,
+            ]}
+          >
+            {title}
+          </Text>
+        )}
 
-        {showNotification ? (
+        {headerRight ? (
+          headerRight
+        ) : showNotification ? (
           <View style={styles.headerActions}>
             <TouchableOpacity onPress={onPressNotification} style={styles.headerIconBtn}>
               <View style={styles.iconWrap}>
@@ -88,6 +138,7 @@ export default function AppLayout({
         <View
           style={[
             styles.footer,
+            footerMode === 'overlay' && styles.footerOverlay,
             {
               height: footerHeight + safeBottom,
               paddingBottom: footerContentPaddingBottom,
@@ -117,10 +168,32 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) =>
       borderBottomColor: colors.borderDefault,
       backgroundColor: colors.background,
     },
+    headerBorderless: {
+      borderBottomWidth: 0,
+    },
     headerTitle: {
       fontSize: 18,
       fontWeight: '600',
       color: colors.textPrimary,
+      flex: 1,
+      textAlign: 'center',
+    },
+    headerTitleButton: {
+      flex: 1,
+      minHeight: 34,
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    headerTitleButtonText: {
+      flex: 0,
+      textAlign: 'left',
+    },
+    headerTitleChevron: {
+      marginLeft: 4,
+      marginTop: 1,
+    },
+    headerTitleLeft: {
+      textAlign: 'left',
     },
     headerActions: {
       flexDirection: 'row',
@@ -157,7 +230,16 @@ const createStyles = (colors: ReturnType<typeof useTheme>['colors']) =>
       borderTopWidth: StyleSheet.hairlineWidth,
       borderTopColor: colors.borderDefault,
       backgroundColor: colors.background,
-      paddingTop: 4,
+      paddingTop: 0,
+    },
+    footerOverlay: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      bottom: 0,
+      borderTopWidth: 0,
+      backgroundColor: 'transparent',
+      paddingTop: 0,
     },
     leftPlaceholder: {
       width: 24,

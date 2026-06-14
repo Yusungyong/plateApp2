@@ -12,18 +12,22 @@ import {
   PanResponder,
   Dimensions,
   TextInput,
-  KeyboardAvoidingView,
   Image,
   ActivityIndicator,
   RefreshControl,
   Alert,
   Pressable,
+  Keyboard,
+  useWindowDimensions,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/Ionicons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import api from '../../../api/axiosInstance';
 import { useAuth } from '../../../auth/AuthProvider';
 import {
   extractItemsFromPage,
+  getKeyboardOverlapInset,
+  getPreferredUserDisplayName,
   isInt32,
   seedAvatar,
   timeAgo,
@@ -45,6 +49,11 @@ type Props = {
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 const CLOSE_THRESHOLD = 120;
+const COLLAPSED_SHEET_HEIGHT_RATIO = 0.66;
+const EXPANDED_SHEET_HEIGHT_RATIO = 0.9;
+const MIN_SHEET_TOP_GAP = 16;
+const COLLAPSED_SHEET_MIN_HEIGHT = 380;
+const EXPANDED_SHEET_MIN_HEIGHT = 460;
 
 // ===== API shapes (서버 DTO 기준) =====
 type ApiAuthor = {
@@ -82,6 +91,7 @@ type ReplyItem = {
   content: string;
   createdAtMs: number;
   authorUsername: string;
+  authorDisplayName: string;
   authorNick?: string;
   authorProfileUri?: string;
 };
@@ -93,6 +103,7 @@ type CommentItem = {
   content: string;
   createdAtMs: number;
   authorUsername: string;
+  authorDisplayName: string;
   authorNick?: string;
   authorProfileUri?: string;
 
@@ -104,7 +115,7 @@ type CommentItem = {
 };
 
 const extractPageMeta = (resData: any) => {
-const page = Number(resData?.page ?? resData?.number ?? 0);
+  const page = Number(resData?.page ?? resData?.number ?? 0);
   const size = Number(resData?.size ?? 20);
   const total = Number(resData?.totalElements ?? 0);
   return {
@@ -119,6 +130,10 @@ const normalizeReply = (r: ApiReply): ReplyItem => {
   const nick = (r?.author?.nickName ?? '').toString().trim();
   const profile = buildProfileUri(username, r?.author?.profileImageUrl);
   const replyId = Number(r?.replyId ?? 0);
+  const displayName = getPreferredUserDisplayName({
+    nickName: r?.author?.nickName,
+    username,
+  });
 
   return {
     id: String(replyId || Date.now()),
@@ -127,6 +142,7 @@ const normalizeReply = (r: ApiReply): ReplyItem => {
     content: (r?.content ?? '').toString(),
     createdAtMs: toMs(r?.createdAt),
     authorUsername: username,
+    authorDisplayName: displayName,
     authorNick: nick || undefined,
     authorProfileUri: profile,
   };
@@ -136,6 +152,10 @@ const normalizeComment = (c: ApiComment): CommentItem => {
   const username = (c?.author?.username ?? 'plate_user').toString();
   const nick = (c?.author?.nickName ?? '').toString().trim();
   const profile = buildProfileUri(username, c?.author?.profileImageUrl);
+  const displayName = getPreferredUserDisplayName({
+    nickName: c?.author?.nickName,
+    username,
+  });
 
   return {
     id: String(c.commentId),
@@ -144,6 +164,7 @@ const normalizeComment = (c: ApiComment): CommentItem => {
     content: (c.content ?? '').toString(),
     createdAtMs: toMs(c.createdAt),
     authorUsername: username,
+    authorDisplayName: displayName,
     authorNick: nick || undefined,
     authorProfileUri: profile,
 
@@ -158,6 +179,8 @@ const normalizeComment = (c: ApiComment): CommentItem => {
 const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onCommentCountChange }) => {
   const { user } = useAuth();
   const { navigateToProfile } = useProfileNavigation();
+  const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
 
   const myUsername = useMemo(() => {
     const u: any = user;
@@ -173,11 +196,15 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
 
   // ✅ Animated refs
   const translateYRef = useRef(new Animated.Value(SCREEN_HEIGHT));
+  const backdropOpacityRef = useRef(new Animated.Value(0));
+  const composerBottomAnimRef = useRef(new Animated.Value(0));
   const sendScaleRef = useRef(new Animated.Value(1));
   const hlPulseRef = useRef(new Animated.Value(0));
 
   const inputRef = useRef<TextInput | null>(null);
   const listRef = useRef<FlatList<CommentItem> | null>(null);
+  const keyboardInsetRef = useRef(0);
+  const keyboardVisibleRef = useRef(false);
 
   const [highlightCommentId, setHighlightCommentId] = useState<number | null>(null);
   const [highlightReplyId, setHighlightReplyId] = useState<number | null>(null);
@@ -189,6 +216,7 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
   const [refreshing, setRefreshing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
 
   const [, setPage] = useState(0);
   const [size, setSize] = useState(20);
@@ -197,9 +225,11 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
   const pageRef = useRef(0);
   const lastLoadMorePageRef = useRef<number | null>(null);
 
-  const [replyTarget, setReplyTarget] = useState<{ commentId: number; username: string } | null>(
-    null,
-  );
+  const [replyTarget, setReplyTarget] = useState<{
+    commentId: number;
+    username: string;
+    displayName: string;
+  } | null>(null);
 
   const [editTarget, setEditTarget] = useState<
     | { type: 'comment'; commentId: number; initialText: string }
@@ -208,6 +238,10 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
   >(null);
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [keyboardInset, setKeyboardInset] = useState(0);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [composerHeight, setComposerHeight] = useState(92);
+  const [isComposerFocused, setIsComposerFocused] = useState(false);
 
   const canSubmit = text.trim().length > 0;
 
@@ -218,11 +252,24 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
   }, []);
 
   const closeWithAnimation = useCallback(() => {
-    Animated.timing(translateYRef.current, {
-      toValue: SCREEN_HEIGHT,
-      duration: 200,
-      useNativeDriver: true,
-    }).start(() => {
+    Keyboard.dismiss();
+    Animated.parallel([
+      Animated.timing(backdropOpacityRef.current, {
+        toValue: 0,
+        duration: 180,
+        useNativeDriver: true,
+      }),
+      Animated.timing(translateYRef.current, {
+        toValue: windowHeight,
+        duration: 240,
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      keyboardInsetRef.current = 0;
+      keyboardVisibleRef.current = false;
+      setKeyboardInset(0);
+      setKeyboardVisible(false);
+      setIsComposerFocused(false);
       pageRef.current = 0;
       lastLoadMorePageRef.current = null;
       setText('');
@@ -231,6 +278,7 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
       setExpanded({});
       setErrorMsg(null);
       setSubmitting(false);
+      submittingRef.current = false;
       setHighlightCommentId(null);
       setHighlightReplyId(null);
       setComments([]);
@@ -239,13 +287,14 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
       setHasNext(true);
       onClose();
     });
-  }, [onClose]);
+  }, [onClose, windowHeight]);
 
   // ✅ panResponder null-safe
   const panResponderRef = useRef<any>(null);
   if (!panResponderRef.current) {
     panResponderRef.current = PanResponder.create({
-      onMoveShouldSetPanResponder: (_: any, g: any) => g.dy > 6,
+      onMoveShouldSetPanResponder: (_: any, g: any) =>
+        keyboardInsetRef.current <= 0 && !keyboardVisibleRef.current && g.dy > 6,
       onPanResponderMove: (_: any, g: any) => {
         if (g.dy > 0) translateYRef.current.setValue(g.dy);
       },
@@ -261,13 +310,23 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
   }
 
   const openAnim = useCallback(() => {
-    translateYRef.current.setValue(SCREEN_HEIGHT);
-    Animated.timing(translateYRef.current, {
-      toValue: 0,
-      duration: 260,
-      useNativeDriver: true,
-    }).start();
-  }, []);
+    translateYRef.current.setValue(windowHeight);
+    backdropOpacityRef.current.setValue(0);
+    Animated.parallel([
+      Animated.timing(backdropOpacityRef.current, {
+        toValue: 1,
+        duration: 220,
+        useNativeDriver: true,
+      }),
+      Animated.spring(translateYRef.current, {
+        toValue: 0,
+        damping: 24,
+        mass: 0.95,
+        stiffness: 210,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [windowHeight]);
 
   const animateSendPress = () => {
     sendScaleRef.current.stopAnimation();
@@ -590,9 +649,10 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
   const submit = async (contentOverride?: string) => {
     const content = (contentOverride ?? text).trim();
     const hasContent = content.length > 0;
-    if (!hasContent || submitting) return { ok: false as const };
+    if (!hasContent || submittingRef.current) return { ok: false as const };
     if (!feedId && feedId !== 0) return { ok: false as const };
 
+    submittingRef.current = true;
     setText('');
     textRef.current = '';
     setSubmitting(true);
@@ -663,6 +723,10 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
       // --- 댓글 등록 ---
       const tempId = `temp-${Date.now()}`;
       const me = myUsername || 'me';
+      const myDisplayName = getPreferredUserDisplayName({
+        nickName: user?.nickName ?? user?.nickname ?? user?.displayName,
+        username: me,
+      });
       const optimistic: CommentItem = {
         id: tempId,
         commentId: 0,
@@ -670,7 +734,11 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
         content,
         createdAtMs: Date.now(),
         authorUsername: me,
-        authorProfileUri: buildProfileUri(me, undefined),
+        authorDisplayName: myDisplayName,
+        authorProfileUri: buildProfileUri(
+          me,
+          user?.profileImageUrl ?? user?.avatarUrl ?? null,
+        ),
         replyCount: 0,
         replies: [],
         repliesLoaded: true,
@@ -707,6 +775,7 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
 
       // 서버 정합성 맞추기 위해 첫 페이지 갱신
       await fetchComments(0, false, { silent: true });
+      scrollToTop(false);
       return { ok: true as const };
     } catch (e: any) {
       const msg = e?.response?.data?.message ?? e?.message ?? '요청에 실패했어요.';
@@ -716,13 +785,14 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
       setComments(prev => prev.filter(c => !c.pending));
       return { ok: false as const };
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   };
 
-  const handleSendTouchStart = (contentOverride?: string) => {
+  const handleSend = (contentOverride?: string) => {
     const content = (contentOverride ?? textRef.current).trim();
-    if (!content || submitting) return;
+    if (!content || submittingRef.current) return;
     animateSendPress();
     submit(content)
       .then((result) => {
@@ -734,21 +804,120 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
   };
 
   const handleSendPress = () => {
-    if (submitting) return;
-    setTimeout(() => {
-      const content = (textRef.current || text).trim();
-      if (!content || submitting) return;
-      handleSendTouchStart(content);
-    }, 0);
+    handleSend((textRef.current || text).trim());
   };
 
   useEffect(() => {
     if (!visible) return;
+    setIsComposerFocused(false);
     openAnim();
     fetchComments(0, false);
     scrollToTop(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, feedId]);
+
+  useEffect(() => {
+    if (!visible) {
+      keyboardInsetRef.current = 0;
+      keyboardVisibleRef.current = false;
+      setKeyboardInset(0);
+      setKeyboardVisible(false);
+      return;
+    }
+
+    const syncKeyboardInset = (event: any) => {
+      const nextInset = getKeyboardOverlapInset(event, insets.bottom);
+
+      keyboardInsetRef.current = nextInset;
+      keyboardVisibleRef.current = true;
+      setKeyboardInset(nextInset);
+      setKeyboardVisible(true);
+    };
+    const resetKeyboardInset = () => {
+      keyboardInsetRef.current = 0;
+      keyboardVisibleRef.current = false;
+      setKeyboardInset(0);
+      setKeyboardVisible(false);
+    };
+
+    const frameEvent =
+      Platform.OS === 'ios' ? 'keyboardWillChangeFrame' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const frameSub = Keyboard.addListener(frameEvent, syncKeyboardInset);
+    const hideSub = Keyboard.addListener(hideEvent, resetKeyboardInset);
+
+    return () => {
+      frameSub.remove();
+      hideSub.remove();
+      keyboardInsetRef.current = 0;
+      keyboardVisibleRef.current = false;
+      setKeyboardInset(0);
+      setKeyboardVisible(false);
+    };
+  }, [insets.bottom, visible]);
+
+  const collapsedSheetHeight = useMemo(
+    () =>
+      Math.max(
+        COLLAPSED_SHEET_MIN_HEIGHT,
+        Math.min(
+          windowHeight - Math.max(insets.top + 8, MIN_SHEET_TOP_GAP),
+          windowHeight * COLLAPSED_SHEET_HEIGHT_RATIO,
+        ),
+      ),
+    [insets.top, windowHeight],
+  );
+
+  const expandedSheetHeight = useMemo(
+    () =>
+      Math.max(
+        EXPANDED_SHEET_MIN_HEIGHT,
+        Math.min(
+          windowHeight - Math.max(insets.top + 8, MIN_SHEET_TOP_GAP),
+          windowHeight * EXPANDED_SHEET_HEIGHT_RATIO,
+        ),
+      ),
+    [insets.top, windowHeight],
+  );
+
+  const shouldExpandSheet =
+    keyboardVisible ||
+    isComposerFocused ||
+    replyTarget != null ||
+    editTarget != null;
+
+  const targetSheetHeight = shouldExpandSheet
+    ? expandedSheetHeight
+    : collapsedSheetHeight;
+
+  const sheetKeyboardLift = 0;
+  const composerBottomInset = keyboardVisible ? keyboardInset : 0;
+  const composerSafeBottom = keyboardVisible ? 6 : Math.max(insets.bottom, 6);
+  const composerPaddingBottom = 12 + composerSafeBottom;
+  const listBottomInset = composerHeight + composerPaddingBottom + composerBottomInset + 12;
+
+  useEffect(() => {
+    Animated.timing(composerBottomAnimRef.current, {
+      toValue: composerBottomInset,
+      duration: keyboardVisible ? 220 : 180,
+      useNativeDriver: false,
+    }).start();
+  }, [composerBottomInset, keyboardVisible]);
+
+  const handleBackdropPress = useCallback(() => {
+    if (keyboardVisibleRef.current) {
+      Keyboard.dismiss();
+      return;
+    }
+    closeWithAnimation();
+  }, [closeWithAnimation]);
+
+  const dismissKeyboardIfVisible = useCallback(() => {
+    if (keyboardVisibleRef.current) {
+      Keyboard.dismiss();
+    }
+  }, []);
 
   // ===== highlight style =====
   const pulseBg = hlPulseRef.current.interpolate({
@@ -789,10 +958,10 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
             style={styles.replyAvatar}
           />
         </TouchableOpacity>
-        <View style={styles.replyBody}>
+          <View style={styles.replyBody}>
           <View style={styles.replyHeaderLine}>
             <TouchableOpacity onPress={() => navigateToProfile(r.authorUsername)}>
-              <Text style={styles.replyUsername}>@{r.authorUsername}</Text>
+              <Text style={styles.replyUsername}>{r.authorDisplayName}</Text>
             </TouchableOpacity>
             <Text style={styles.replyTime}> · {timeAgo(r.createdAtMs)}</Text>
 
@@ -841,7 +1010,7 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
           <View style={styles.commentBody}>
             <View style={styles.commentHeaderLine}>
               <TouchableOpacity onPress={() => navigateToProfile(item.authorUsername)}>
-                <Text style={styles.commentUsername}>@{item.authorUsername}</Text>
+                <Text style={styles.commentUsername}>{item.authorDisplayName}</Text>
               </TouchableOpacity>
               <Text style={styles.commentTime}> · {timeAgo(item.createdAtMs)}</Text>
               {item.pending ? (
@@ -864,7 +1033,11 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
             <View style={styles.commentActions}>
               <TouchableOpacity
                 onPress={() => {
-                  setReplyTarget({ commentId: item.commentId, username: item.authorUsername });
+                  setReplyTarget({
+                    commentId: item.commentId,
+                    username: item.authorUsername,
+                    displayName: item.authorDisplayName,
+                  });
                   setEditTarget(null);
                   setExpanded(prev => ({ ...prev, [String(item.commentId)]: true }));
                   requestAnimationFrame(() => inputRef.current?.focus?.());
@@ -922,7 +1095,7 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
       ? '댓글 수정 중'
       : '답글 수정 중'
     : replyTarget
-      ? `@${replyTarget.username}에게 답글`
+      ? `${replyTarget.displayName}에게 답글`
       : null;
 
   const cancelMode = () => {
@@ -941,19 +1114,28 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
       presentationStyle="overFullScreen"
     >
       <View style={styles.backdrop}>
+        <Animated.View
+          pointerEvents="none"
+          style={[styles.backdropDim, { opacity: backdropOpacityRef.current }]}
+        />
         {/* 바깥 눌러 닫기 */}
-        <Pressable style={StyleSheet.absoluteFill} onPress={closeWithAnimation} />
+        <Pressable style={StyleSheet.absoluteFill} onPress={handleBackdropPress} />
 
-        <KeyboardAvoidingView
-          style={styles.kav}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          keyboardVerticalOffset={0}
-          pointerEvents="box-none"
+        <Animated.View
+          style={[
+            styles.sheet,
+            {
+              height: targetSheetHeight,
+              transform: [
+                { translateY: translateYRef.current },
+                { translateY: -sheetKeyboardLift },
+              ],
+            },
+          ]}
         >
-          <Animated.View style={[styles.sheet, { transform: [{ translateY: translateYRef.current }] }]}>
             {/* 드래그 핸들 */}
             <View {...(panResponderRef.current?.panHandlers ?? {})}>
-              <View style={styles.header}>
+              <View style={styles.header} onTouchStart={dismissKeyboardIfVisible}>
                 <View style={styles.headerHandle} />
                 <Text style={styles.headerTitle}>댓글 {comments.length}</Text>
                 <TouchableOpacity onPress={closeWithAnimation} style={styles.closeBtn}>
@@ -962,99 +1144,117 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
               </View>
             </View>
 
-            {loading ? (
-              <View style={styles.loadingWrap}>
-                <ActivityIndicator />
-                <Text style={styles.loadingText}>댓글 불러오는 중…</Text>
-              </View>
-            ) : (
-              <FlatList
-                ref={r => {
-                  listRef.current = r;
-                }}
-                data={comments}
-                keyExtractor={c => c.id}
-                renderItem={renderItem}
-                keyboardShouldPersistTaps="always"
-                onEndReached={canLoadMore ? loadMore : undefined}
-                onEndReachedThreshold={0.3}
-                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}
-                contentContainerStyle={[
-                  styles.listContent,
-                  comments.length === 0 && styles.listContentEmpty,
-                ]}
-                ListEmptyComponent={
-                  <View style={styles.empty}>
-                    <Text style={styles.emptyText}>{errorMsg ? errorMsg : '아직 댓글이 없어요.'}</Text>
-                  </View>
-                }
-              />
-            )}
-
-            {/* 입력 영역 */}
-            <View style={styles.inputDock}>
-              {modeLabel ? (
-                <View style={styles.modeBar}>
-                  <Text style={styles.modeText}>{modeLabel}</Text>
-                  <TouchableOpacity onPress={cancelMode} style={styles.modeClose} activeOpacity={0.85}>
-                    <Icon name="close" size={14} color="#6b7280" />
-                  </TouchableOpacity>
+            <View style={styles.body}>
+              {loading ? (
+                <View style={styles.loadingWrap}>
+                  <ActivityIndicator />
+                  <Text style={styles.loadingText}>댓글 불러오는 중…</Text>
                 </View>
-              ) : null}
-
-              <View style={styles.inputCard}>
-                <TextInput
+              ) : (
+                <FlatList
                   ref={r => {
-                    inputRef.current = r;
+                    listRef.current = r;
                   }}
-                  value={text}
-                  onChangeText={value => {
-                    textRef.current = value;
-                    setText(value);
-                  }}
-                  placeholder={placeholder}
-                  placeholderTextColor="#9aa0a6"
-                  style={styles.input}
-                  multiline
-                  blurOnSubmit={false}
-                  submitBehavior="submit"
-                  returnKeyType="send"
-                  onSubmitEditing={() => {
-                    const content = (textRef.current || text).trim();
-                    if (!content || submitting) return;
-                    animateSendPress();
-                    submit(content)
-                      .then((result) => {
-                        if (result.ok) animateSendSuccess();
-                      })
-                      .catch(() => {});
-                  }}
-                />
-
-                <Pressable
-                  onTouchStart={handleSendPress}
-                  disabled={!canSubmit || submitting}
-                  style={({ pressed }) => [
-                    styles.sendBtn,
-                    (!canSubmit || submitting) && styles.sendBtnDisabled,
-                    pressed && canSubmit && !submitting ? styles.sendBtnPressed : null,
+                  style={styles.list}
+                  data={comments}
+                  keyExtractor={c => c.id}
+                  renderItem={renderItem}
+                  keyboardShouldPersistTaps="handled"
+                  keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+                  onTouchStart={dismissKeyboardIfVisible}
+                  onScrollBeginDrag={dismissKeyboardIfVisible}
+                  onEndReached={canLoadMore ? loadMore : undefined}
+                  onEndReachedThreshold={0.3}
+                  refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}
+                  contentContainerStyle={[
+                    styles.listContent,
+                    { paddingBottom: listBottomInset },
+                    comments.length === 0 && styles.listContentEmpty,
                   ]}
-                  hitSlop={10}
-                >
-                  <Animated.View style={{ transform: [{ scale: sendScaleRef.current }] }}>
-                    <Icon name="send" size={18} color={canSubmit && !submitting ? '#fff' : '#bdbdbd'} />
-                  </Animated.View>
-                </Pressable>
-              </View>
+                  scrollIndicatorInsets={{ bottom: listBottomInset }}
+                  ListEmptyComponent={
+                    <View style={styles.empty}>
+                      <Text style={styles.emptyText}>{errorMsg ? errorMsg : '아직 댓글이 없어요.'}</Text>
+                    </View>
+                  }
+                />
+              )}
 
-              {errorMsg ? (
-                <Text style={styles.errorSmall} numberOfLines={2}>
-                  {errorMsg}
-                </Text>
-              ) : null}
+              {/* 입력 영역 */}
+              <Animated.View
+                style={[
+                  styles.inputDock,
+                  {
+                    bottom: composerBottomAnimRef.current,
+                    paddingBottom: composerPaddingBottom,
+                  },
+                ]}
+                onLayout={event => {
+                  const nextHeight = Math.ceil(event.nativeEvent.layout.height);
+                  if (nextHeight > 0 && nextHeight !== composerHeight) {
+                    setComposerHeight(nextHeight);
+                  }
+                }}
+              >
+                {modeLabel ? (
+                  <View style={styles.modeBar}>
+                    <Text style={styles.modeText}>{modeLabel}</Text>
+                    <TouchableOpacity onPress={cancelMode} style={styles.modeClose} activeOpacity={0.85}>
+                      <Icon name="close" size={14} color="#6b7280" />
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
+
+                <View style={styles.inputCard}>
+                  <TextInput
+                    ref={r => {
+                      inputRef.current = r;
+                    }}
+                    value={text}
+                    onChangeText={value => {
+                      textRef.current = value;
+                      setText(value);
+                    }}
+                    placeholder={placeholder}
+                    placeholderTextColor="#9aa0a6"
+                    style={styles.input}
+                    multiline
+                    onFocus={() => setIsComposerFocused(true)}
+                    onBlur={() => setIsComposerFocused(false)}
+                    blurOnSubmit={false}
+                    submitBehavior="submit"
+                    returnKeyType="send"
+                    onSubmitEditing={() => {
+                      const content = (textRef.current || text).trim();
+                      if (!content || submittingRef.current) return;
+                      handleSend(content);
+                    }}
+                  />
+
+                  <Pressable
+                    onPress={handleSendPress}
+                    disabled={!canSubmit || submitting}
+                    style={({ pressed }) => [
+                      styles.sendBtn,
+                      (!canSubmit || submitting) && styles.sendBtnDisabled,
+                      pressed && canSubmit && !submitting ? styles.sendBtnPressed : null,
+                    ]}
+                    hitSlop={10}
+                  >
+                    <Animated.View style={{ transform: [{ scale: sendScaleRef.current }] }}>
+                      <Icon name="send" size={18} color={canSubmit && !submitting ? '#fff' : '#bdbdbd'} />
+                    </Animated.View>
+                  </Pressable>
+                </View>
+
+                {errorMsg ? (
+                  <Text style={styles.errorSmall} numberOfLines={2}>
+                    {errorMsg}
+                  </Text>
+                ) : null}
+              </Animated.View>
             </View>
           </Animated.View>
-        </KeyboardAvoidingView>
       </View>
     </Modal>
   );
@@ -1063,17 +1263,19 @@ const FeedCommentModal: React.FC<Props> = ({ visible, onClose, feedId, onComment
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
     justifyContent: 'flex-end',
   },
-  kav: { width: '100%', justifyContent: 'flex-end' },
+  backdropDim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
   sheet: {
-    height: '75%',
     backgroundColor: '#fff',
     borderTopLeftRadius: 18,
     borderTopRightRadius: 18,
     overflow: 'hidden',
   },
+  body: { flex: 1 },
   header: {
     paddingTop: 8,
     paddingBottom: 12,
@@ -1096,6 +1298,7 @@ const styles = StyleSheet.create({
   loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10 },
   loadingText: { color: '#9aa0a6', fontSize: 13, fontWeight: '700' },
 
+  list: { flex: 1 },
   listContent: { paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6 },
   listContentEmpty: { flexGrow: 1 },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center' },
@@ -1197,7 +1400,16 @@ const styles = StyleSheet.create({
   moreBtnSmall: { marginLeft: 'auto', paddingHorizontal: 6, paddingVertical: 2 },
   replyText: { marginTop: 3, color: '#111827', fontSize: 13, fontWeight: '600', lineHeight: 18 },
 
-  inputDock: { paddingHorizontal: 12, paddingTop: 8, paddingBottom: 14, backgroundColor: '#fff' },
+  inputDock: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    paddingHorizontal: 12,
+    paddingTop: 8,
+    backgroundColor: '#fff',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#eceef1',
+  },
   modeBar: {
     flexDirection: 'row',
     alignItems: 'center',

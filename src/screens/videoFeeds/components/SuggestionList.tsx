@@ -9,11 +9,6 @@ import {
   StyleSheet,
 } from 'react-native';
 
-interface SuggestionItem {
-  title: string;
-  subtitle?: string;
-}
-
 interface SuggestionListProps<T> {
   items: T[];
   loading: boolean;

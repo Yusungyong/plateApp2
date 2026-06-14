@@ -23,6 +23,7 @@ import MapView, {
   Callout,
   LatLng,
   Marker,
+  Polyline,
   PROVIDER_GOOGLE,
   Region,
 } from 'react-native-maps';
@@ -31,7 +32,7 @@ import type { HomeMapPreviewProps } from '../types';
 import { useNearbyMarkers } from '../hooks/useNearbyMarkers';
 import { useMarkerGroups } from '../hooks/useMarkerGroups';
 import { useMapSearch } from '../hooks/useMapSearch';
-import { buildImageUrl, isRenderableImageAssetPath } from '../utils/imageUtils';
+import { buildImageUrl } from '../utils/imageUtils';
 import {
   DEFAULT_REGION,
   calculateVisibleBounds,
@@ -45,12 +46,9 @@ import MapOverlays from './MapOverlays';
 import ClusterModal from './ClusterModal';
 import type { HomeLocationStatus } from '../types';
 import { getAndroidCurrentPosition } from '../../../native/plateLocation';
-import { createLogger } from '../../../utils/logger';
 
 const USE_DEVICE_LOCATION = true;
 const INITIAL_REGION: Region = { ...DEFAULT_REGION };
-const logger = createLogger('[HomeMapPreview]');
-const markerDebugOnceKeys = new Set<string>();
 const ANDROID_LOCATION_PERMISSION_RATIONALE = {
   title: '위치 권한이 필요해요',
   message:
@@ -70,7 +68,22 @@ type GeoError = { code?: number };
 type StoreMapMarkerProps = {
   marker: NearbyStoreMarker;
   markerKey: string;
+  selected?: boolean;
   onPressMarker: (marker: NearbyStoreMarker) => void;
+};
+
+const distanceBetweenCoordinatesMeters = (a: LatLng, b: LatLng) => {
+  const earthRadius = 6371000;
+  const dLat = ((b.latitude - a.latitude) * Math.PI) / 180;
+  const dLng = ((b.longitude - a.longitude) * Math.PI) / 180;
+  const lat1 = (a.latitude * Math.PI) / 180;
+  const lat2 = (b.latitude * Math.PI) / 180;
+  const sinDLat = Math.sin(dLat / 2);
+  const sinDLng = Math.sin(dLng / 2);
+  const calc =
+    sinDLat * sinDLat + Math.cos(lat1) * Math.cos(lat2) * sinDLng * sinDLng;
+  const c = 2 * Math.atan2(Math.sqrt(calc), Math.sqrt(1 - calc));
+  return earthRadius * c;
 };
 
 const buildStoreMarkerKey = (marker: NearbyStoreMarker) => {
@@ -81,30 +94,8 @@ const buildStoreMarkerKey = (marker: NearbyStoreMarker) => {
   return `${storeId}-${marker.lat.toFixed(6)}-${marker.lng.toFixed(6)}`;
 };
 
-const toLogError = (error: unknown) => {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  if (typeof error === 'string') {
-    return error;
-  }
-  return error == null ? null : String(error);
-};
-
-const logMarkerDebugOnce = (
-  event: string,
-  dedupeKey: string,
-  payload?: Record<string, unknown>,
-) => {
-  const key = `${event}:${dedupeKey}`;
-  if (markerDebugOnceKeys.has(key)) {
-    return;
-  }
-  markerDebugOnceKeys.add(key);
-  logger.warn(event, payload);
-};
-
-const StoreMapMarker = memo<StoreMapMarkerProps>(({ marker, markerKey, onPressMarker }) => {
+const StoreMapMarker = memo<StoreMapMarkerProps>(
+  ({ marker, markerKey, selected = false, onPressMarker }) => {
   const markerImage = useMemo(() => buildImageUrl(marker.thumbnail), [marker.thumbnail]);
   const feedLabel =
     marker.feedCount && marker.feedCount > 99 ? '99+' : String(marker.feedCount ?? 0);
@@ -135,26 +126,11 @@ const StoreMapMarker = memo<StoreMapMarkerProps>(({ marker, markerKey, onPressMa
           return;
         }
         setImagePrefetched(prefetched);
-        if (!prefetched) {
-          logMarkerDebugOnce('marker debug prefetch failed', `${markerKey}|${markerImage}`, {
-            markerKey,
-            storeName: marker.storeName,
-            thumbnail: marker.thumbnail,
-            markerImage,
-          });
-        }
       })
-      .catch((error) => {
+      .catch(() => {
         if (cancelled) {
           return;
         }
-        logMarkerDebugOnce('marker debug prefetch error', `${markerKey}|${markerImage}`, {
-          markerKey,
-          storeName: marker.storeName,
-          thumbnail: marker.thumbnail,
-          markerImage,
-          error: toLogError(error),
-        });
         setImagePrefetched(false);
       });
 
@@ -163,38 +139,9 @@ const StoreMapMarker = memo<StoreMapMarkerProps>(({ marker, markerKey, onPressMa
     };
   }, [marker.storeName, marker.thumbnail, markerImage, markerKey]);
 
-  useEffect(() => {
-    if (!marker.thumbnail || isRenderableImageAssetPath(marker.thumbnail)) {
-      return;
-    }
-    logMarkerDebugOnce('marker debug skipped non-image asset', `${markerKey}|${marker.thumbnail}`, {
-      markerKey,
-      storeName: marker.storeName,
-      thumbnail: marker.thumbnail,
-    });
-  }, [marker.storeName, marker.thumbnail, markerKey]);
-
   const showImageMarker =
     !!markerImage && !imageLoadFailed && (Platform.OS !== 'android' || imagePrefetched);
-  useEffect(() => {
-    if (showImageMarker || !imageLoadFailed) {
-      return;
-    }
-    logMarkerDebugOnce('marker debug fallback after image failure', `${markerKey}|${markerImage}`, {
-      markerKey,
-      storeName: marker.storeName,
-      thumbnail: marker.thumbnail,
-      markerImage,
-      imageLoadFailed,
-    });
-  }, [
-    imageLoadFailed,
-    marker.storeName,
-    marker.thumbnail,
-    markerImage,
-    markerKey,
-    showImageMarker,
-  ]);
+  const shouldTrackViewChanges = Platform.OS === 'android' ? showImageMarker && !imageLoaded : false;
 
   return (
     <Marker
@@ -204,21 +151,21 @@ const StoreMapMarker = memo<StoreMapMarkerProps>(({ marker, markerKey, onPressMa
       description={`피드 ${marker.feedCount ?? 0}개`}
       anchor={{ x: 0.5, y: 1 }}
       calloutAnchor={{ x: 0.5, y: 0.1 }}
-      tracksViewChanges={Platform.OS === 'android'}
+      tracksViewChanges={shouldTrackViewChanges}
       onPress={() => onPressMarker(marker)}
     >
-      <View
-        style={styles.storePinFrame}
-        collapsable={false}
-      >
+      <View style={styles.storePinFrame} collapsable={false}>
         <View
-          style={styles.storePin}
+          style={[styles.storePin, selected && styles.storePinSelected]}
           collapsable={false}
         >
           {showImageMarker ? (
             <>
               <View
-                style={styles.storePinImageWrap}
+                style={[
+                  styles.storePinImageWrap,
+                  selected && styles.storePinImageWrapSelected,
+                ]}
                 collapsable={false}
               >
                 <Image
@@ -227,24 +174,12 @@ const StoreMapMarker = memo<StoreMapMarkerProps>(({ marker, markerKey, onPressMa
                   resizeMode="cover"
                   fadeDuration={0}
                   onLoad={() => {
-                    logger.debug('marker debug image loaded', {
-                      markerKey,
-                      storeName: marker.storeName,
-                      thumbnail: marker.thumbnail,
-                      markerImage,
-                    });
                     setImageLoaded(true);
                   }}
                   onLoadEnd={() => {
                     setImageLoaded(true);
                   }}
                   onError={() => {
-                    logMarkerDebugOnce('marker debug image load failed', `${markerKey}|${markerImage}`, {
-                      markerKey,
-                      storeName: marker.storeName,
-                      thumbnail: marker.thumbnail,
-                      markerImage,
-                    });
                     setImageLoadFailed(true);
                   }}
                 />
@@ -252,14 +187,14 @@ const StoreMapMarker = memo<StoreMapMarkerProps>(({ marker, markerKey, onPressMa
                   <Text style={styles.imageBadgeText}>{feedLabel}</Text>
                 </View>
               </View>
-              <View style={styles.storePinTail} />
+              <View style={[styles.storePinTail, selected && styles.storePinTailSelected]} />
             </>
           ) : (
             <>
-              <View style={styles.storePinHead}>
+              <View style={[styles.storePinHead, selected && styles.storePinHeadSelected]}>
                 <Text style={styles.storePinLabel}>{feedLabel}</Text>
               </View>
-              <View style={styles.storePinTail} />
+              <View style={[styles.storePinTail, selected && styles.storePinTailSelected]} />
             </>
           )}
         </View>
@@ -277,24 +212,40 @@ const StoreMapMarker = memo<StoreMapMarkerProps>(({ marker, markerKey, onPressMa
       </Callout>
     </Marker>
   );
-});
+  },
+);
 
 const HomeMapPreview: React.FC<HomeMapPreviewProps> = ({
   onPressMarker,
+  onNearbyStateChange,
   onVisibleRegionChange,
   onPressMap,
   interactive = false,
   isActive = true,
   style,
+  selectedMarkerKey,
+  initialFocusCoordinate,
+  suspendInitialUserCentering = false,
   onRequestCenterUser,
   onLocationStatusChange,
   onUserLocationResolved,
+  routePolyline,
+  routeOriginCoordinate,
+  routeDestinationCoordinate,
 }) => {
   const [regionDeltas] = useState({
     latitudeDelta: INITIAL_REGION.latitudeDelta,
     longitudeDelta: INITIAL_REGION.longitudeDelta,
   });
   const [region, setRegion] = useState<Region>(() => {
+    if (initialFocusCoordinate) {
+      return {
+        latitude: initialFocusCoordinate.latitude,
+        longitude: initialFocusCoordinate.longitude,
+        latitudeDelta: regionDeltas.latitudeDelta,
+        longitudeDelta: regionDeltas.longitudeDelta,
+      };
+    }
     if (lastKnownMapRegionRef.current) {
       return lastKnownMapRegionRef.current;
     }
@@ -309,7 +260,9 @@ const HomeMapPreview: React.FC<HomeMapPreviewProps> = ({
     return INITIAL_REGION;
   });
   const [focusCoordinate, setFocusCoordinate] = useState<LatLng | null>(null);
-  const [hasCenteredUser, setHasCenteredUser] = useState(false);
+  const [hasCenteredUser, setHasCenteredUser] = useState(
+    Boolean(interactive && (suspendInitialUserCentering || initialFocusCoordinate)),
+  );
   const mapRef = useRef<MapView | null>(null);
   const insets = useSafeAreaInsets();
   const isDefaultRegion = useCallback(
@@ -372,7 +325,9 @@ const HomeMapPreview: React.FC<HomeMapPreviewProps> = ({
   const userLocationRef = useRef<LatLng | null>(lastKnownUserLocationRef.current);
   const isAnimatingRef = useRef(false);
   const pendingCenterRef = useRef(false);
-  const followUserRef = useRef(!interactive);
+  const followUserRef = useRef(
+    !interactive && !suspendInitialUserCentering && !initialFocusCoordinate,
+  );
   const markerGroups = useMarkerGroups(storeMarkers);
   const { suggestions, loading: suggestLoading, lastSearchedTerm } = useMapSearch(searchTerm, interactive);
   const searchTop = Math.max(insets.top + 64, 36);
@@ -427,11 +382,54 @@ const HomeMapPreview: React.FC<HomeMapPreviewProps> = ({
   const [showClusterHint, setShowClusterHint] = useState(false);
   const clusterHintOpacity = useRef(new Animated.Value(0)).current;
   const hasShownClusterHintRef = useRef(false);
-  const [prefetchedMarkerImages, setPrefetchedMarkerImages] = useState<Record<string, true>>({});
-  const prefetchedMarkerLogRef = useRef<Record<string, true>>({});
-  const prefetchedMarkerFailureRef = useRef<Record<string, true>>({});
-  const prefetchInFlightRef = useRef<Record<string, true>>({});
-  const prefetchSettledRef = useRef<Record<string, true>>({});
+  const appliedInitialFocusKeyRef = useRef<string | null>(null);
+  const appliedRouteFitKeyRef = useRef<string | null>(null);
+
+  const initialFocusKey = useMemo(() => {
+    if (!initialFocusCoordinate) return null;
+    return `${initialFocusCoordinate.latitude.toFixed(6)}:${initialFocusCoordinate.longitude.toFixed(6)}`;
+  }, [initialFocusCoordinate]);
+  const normalizedRoutePolyline = useMemo(
+    () =>
+      (routePolyline ?? []).filter(
+        (coord): coord is LatLng =>
+          Number.isFinite(coord?.latitude) && Number.isFinite(coord?.longitude),
+      ),
+    [routePolyline],
+  );
+  const routeFitCoordinates = useMemo(() => {
+    if (normalizedRoutePolyline.length >= 2) {
+      return normalizedRoutePolyline;
+    }
+    if (routeOriginCoordinate && routeDestinationCoordinate) {
+      return [routeOriginCoordinate, routeDestinationCoordinate];
+    }
+    return [];
+  }, [normalizedRoutePolyline, routeDestinationCoordinate, routeOriginCoordinate]);
+  const routeFitKey = useMemo(() => {
+    if (routeFitCoordinates.length < 2) {
+      return null;
+    }
+    const first = routeFitCoordinates[0];
+    const last = routeFitCoordinates[routeFitCoordinates.length - 1];
+    return [
+      routeFitCoordinates.length,
+      first.latitude.toFixed(6),
+      first.longitude.toFixed(6),
+      last.latitude.toFixed(6),
+      last.longitude.toFixed(6),
+    ].join(':');
+  }, [routeFitCoordinates]);
+
+  useEffect(() => {
+    if (interactive && suspendInitialUserCentering) {
+      followUserRef.current = false;
+      pendingCenterRef.current = false;
+      if (initialFocusCoordinate) {
+        setHasCenteredUser(true);
+      }
+    }
+  }, [initialFocusCoordinate, interactive, suspendInitialUserCentering]);
 
   const syncLocationStatus = useCallback((nextStatus: HomeLocationStatus) => {
     lastKnownLocationStatusRef.current = nextStatus;
@@ -678,8 +676,17 @@ const HomeMapPreview: React.FC<HomeMapPreviewProps> = ({
       lastKnownUserLocationRef.current = coord;
       userLocationRef.current = coord;
       onUserLocationResolved?.(coord);
+      if (interactive && suspendInitialUserCentering) {
+        setMarkersEnabled(true);
+        setLocationPermissionGranted(true);
+        setLocationPermissionDenied(false);
+        syncLocationStatus('granted');
+        return;
+      }
       centerToCoordinate(coord, { enableFollow: true });
-      setRegion(nextRegion);
+      if (interactive) {
+        setRegion(nextRegion);
+      }
       lastKnownMapRegionRef.current = nextRegion;
       setMarkersEnabled(true);
       setLocationPermissionGranted(true);
@@ -688,12 +695,9 @@ const HomeMapPreview: React.FC<HomeMapPreviewProps> = ({
     };
 
     if (Platform.OS === 'android') {
-      logger.debug('requesting android native location');
       getAndroidCurrentPosition().then((pos) => {
-        logger.debug('android native location resolved', { pos });
         if (cancelled || !pos) {
           if (!geo?.getCurrentPosition) {
-            logger.warn('android location unavailable and JS geolocation missing');
             return;
           }
           geo.getCurrentPosition(
@@ -701,10 +705,6 @@ const HomeMapPreview: React.FC<HomeMapPreviewProps> = ({
               if (cancelled) {
                 return;
               }
-              logger.debug('js geolocation fallback resolved', {
-                latitude: fallbackPos.coords.latitude,
-                longitude: fallbackPos.coords.longitude,
-              });
               applyResolvedLocation(
                 fallbackPos.coords.latitude,
                 fallbackPos.coords.longitude,
@@ -714,7 +714,6 @@ const HomeMapPreview: React.FC<HomeMapPreviewProps> = ({
               if (cancelled) {
                 return;
               }
-              logger.warn('js geolocation fallback failed', { err });
               if (err?.code === 1) {
                 setLocationPermissionGranted(false);
                 setLocationPermissionDenied(true);
@@ -727,10 +726,6 @@ const HomeMapPreview: React.FC<HomeMapPreviewProps> = ({
           );
           return;
         }
-        logger.debug('applying android native location', {
-          latitude: pos.latitude,
-          longitude: pos.longitude,
-        });
         applyResolvedLocation(pos.latitude, pos.longitude);
       });
       return () => {
@@ -767,11 +762,13 @@ const HomeMapPreview: React.FC<HomeMapPreviewProps> = ({
     };
   }, [
     centerToCoordinate,
+    interactive,
     locationPermissionGranted,
     locationPermissionDenied,
     onUserLocationResolved,
     regionDeltas.latitudeDelta,
     regionDeltas.longitudeDelta,
+    suspendInitialUserCentering,
     syncLocationStatus,
   ]);
 
@@ -809,13 +806,25 @@ const HomeMapPreview: React.FC<HomeMapPreviewProps> = ({
       }
 
       const coord = { latitude, longitude };
-      logger.debug('received onUserLocationChange', coord);
+      const previousCoord = userLocationRef.current;
+      const movedMeters = previousCoord
+        ? distanceBetweenCoordinatesMeters(previousCoord, coord)
+        : Number.POSITIVE_INFINITY;
+      const minMovementMeters = interactive ? 12 : 35;
       userLocationRef.current = coord;
       lastKnownUserLocationRef.current = coord;
       onUserLocationResolved?.(coord);
       setLocationPermissionGranted(true);
       setLocationPermissionDenied(false);
       syncLocationStatus('granted');
+      if (
+        previousCoord &&
+        movedMeters < minMovementMeters &&
+        hasCenteredUser &&
+        !pendingCenterRef.current
+      ) {
+        return;
+      }
       if (interactive && !followUserRef.current && hasCenteredUser) {
         return;
       }
@@ -827,9 +836,15 @@ const HomeMapPreview: React.FC<HomeMapPreviewProps> = ({
       };
 
       if (!hasCenteredUser) {
+        if (suspendInitialUserCentering) {
+          setMarkersEnabled(true);
+          return;
+        }
         centerToCoordinate(coord, { enableFollow: true });
         setHasCenteredUser(true);
-        setRegion(nextRegion);
+        if (interactive) {
+          setRegion(nextRegion);
+        }
         lastKnownMapRegionRef.current = nextRegion;
         setMarkersEnabled(true);
         return;
@@ -841,7 +856,9 @@ const HomeMapPreview: React.FC<HomeMapPreviewProps> = ({
       }
 
       pendingCenterRef.current = false;
-      setRegion(nextRegion);
+      if (interactive) {
+        setRegion(nextRegion);
+      }
       lastKnownMapRegionRef.current = nextRegion;
       centerToCoordinate(coord);
       setMarkersEnabled(true);
@@ -853,6 +870,7 @@ const HomeMapPreview: React.FC<HomeMapPreviewProps> = ({
       onUserLocationResolved,
       regionDeltas.latitudeDelta,
       regionDeltas.longitudeDelta,
+      suspendInitialUserCentering,
       syncLocationStatus,
     ],
   );
@@ -889,79 +907,83 @@ const HomeMapPreview: React.FC<HomeMapPreviewProps> = ({
   }, [onVisibleRegionChange, visibleBounds, region]);
 
   useEffect(() => {
-    storeMarkers?.forEach((marker) => {
-      const markerKey = buildStoreMarkerKey(marker);
-      const url = buildImageUrl(marker.thumbnail);
-
-      if (!url) {
-        if (prefetchedMarkerFailureRef.current[markerKey]) {
-          return;
-        }
-        prefetchedMarkerFailureRef.current[markerKey] = true;
-        logMarkerDebugOnce(
-          isRenderableImageAssetPath(marker.thumbnail)
-            ? 'marker debug missing image url'
-            : 'marker debug skipped non-image asset',
-          markerKey,
-          {
-            markerKey,
-            storeName: marker.storeName,
-            thumbnail: marker.thumbnail,
-          },
-        );
-        return;
-      }
-
-      if (!prefetchedMarkerLogRef.current[url]) {
-        prefetchedMarkerLogRef.current[url] = true;
-      }
-
-      if (
-        prefetchedMarkerImages[url] ||
-        prefetchSettledRef.current[url] ||
-        prefetchInFlightRef.current[url]
-      ) {
-        return;
-      }
-
-      prefetchInFlightRef.current[url] = true;
-      Image.prefetch(url)
-        .then((ok) => {
-          delete prefetchInFlightRef.current[url];
-          if (!ok) {
-            prefetchSettledRef.current[url] = true;
-            logMarkerDebugOnce('marker debug prefetch returned false', `${markerKey}|${url}`, {
-              markerKey,
-              storeName: marker.storeName,
-              thumbnail: marker.thumbnail,
-              url,
-            });
-            return;
-          }
-          prefetchSettledRef.current[url] = true;
-          setPrefetchedMarkerImages((prev) => {
-            if (prev[url]) {
-              return prev;
-            }
-            return {
-              ...prev,
-              [url]: true,
-            };
-          });
-        })
-        .catch((error) => {
-          delete prefetchInFlightRef.current[url];
-          prefetchSettledRef.current[url] = true;
-          logMarkerDebugOnce('marker debug prefetch failed', `${markerKey}|${url}`, {
-            markerKey,
-            storeName: marker.storeName,
-            thumbnail: marker.thumbnail,
-            url,
-            error: toLogError(error),
-          });
-        });
+    onNearbyStateChange?.({
+      markers: storeMarkers,
+      loading: markersLoading,
+      error: markersError,
     });
-  }, [prefetchedMarkerImages, storeMarkers]);
+  }, [markersError, markersLoading, onNearbyStateChange, storeMarkers]);
+
+  useEffect(() => {
+    if (!interactive || !isActive || !initialFocusCoordinate || !initialFocusKey) {
+      return;
+    }
+    if (appliedInitialFocusKeyRef.current === initialFocusKey) {
+      return;
+    }
+
+    appliedInitialFocusKeyRef.current = initialFocusKey;
+    followUserRef.current = false;
+    pendingCenterRef.current = false;
+    setHasCenteredUser(true);
+    setFocusCoordinate(initialFocusCoordinate);
+    setMarkersEnabled(true);
+
+    const nextRegion: Region = {
+      latitude: initialFocusCoordinate.latitude,
+      longitude: initialFocusCoordinate.longitude,
+      latitudeDelta: regionDeltas.latitudeDelta,
+      longitudeDelta: regionDeltas.longitudeDelta,
+    };
+
+    setRegion(nextRegion);
+    lastKnownMapRegionRef.current = nextRegion;
+    isAnimatingRef.current = true;
+
+    if (mapRef.current) {
+      mapRef.current.animateToRegion(nextRegion, 220);
+    }
+  }, [
+    initialFocusCoordinate,
+    initialFocusKey,
+    interactive,
+    isActive,
+    regionDeltas.latitudeDelta,
+    regionDeltas.longitudeDelta,
+    suspendInitialUserCentering,
+  ]);
+
+  useEffect(() => {
+    if (!interactive || !isActive) {
+      return;
+    }
+    if (!routeFitKey || routeFitCoordinates.length < 2) {
+      appliedRouteFitKeyRef.current = null;
+      return;
+    }
+    if (appliedRouteFitKeyRef.current === routeFitKey) {
+      return;
+    }
+
+    appliedRouteFitKeyRef.current = routeFitKey;
+    followUserRef.current = false;
+    pendingCenterRef.current = false;
+    setHasCenteredUser(true);
+    setMarkersEnabled(true);
+    isAnimatingRef.current = true;
+
+    requestAnimationFrame(() => {
+      mapRef.current?.fitToCoordinates(routeFitCoordinates, {
+        animated: true,
+        edgePadding: {
+          top: Math.max(insets.top + 100, 120),
+          right: 56,
+          bottom: Math.max(insets.bottom + 160, 200),
+          left: 56,
+        },
+      });
+    });
+  }, [interactive, isActive, insets.bottom, insets.top, routeFitCoordinates, routeFitKey]);
 
   const handleRegionChangeComplete = useCallback(
     (nextRegion: Region) => {
@@ -1098,7 +1120,7 @@ const HomeMapPreview: React.FC<HomeMapPreviewProps> = ({
               description={`같은 위치 ${items.length}곳 / 피드 ${totalFeedCount}`}
               anchor={{ x: 0.5, y: 1 }}
               calloutAnchor={{ x: 0.5, y: 0.1 }}
-              tracksViewChanges={Platform.OS === 'android'}
+              tracksViewChanges={false}
               onPress={() => handleClusterPress({ marker, items })}
             >
               <View style={styles.clusterPinFrame} collapsable={false}>
@@ -1117,11 +1139,18 @@ const HomeMapPreview: React.FC<HomeMapPreviewProps> = ({
             key={`single_${markerKey}`}
             marker={marker}
             markerKey={markerKey}
+            selected={selectedMarkerKey === markerKey}
             onPressMarker={handlePressMarker}
           />
         );
       }),
-    [buildMarkerKey, handlePressMarker, handleClusterPress, markerGroups],
+    [
+      buildMarkerKey,
+      handlePressMarker,
+      handleClusterPress,
+      markerGroups,
+      selectedMarkerKey,
+    ],
   );
 
   return (
@@ -1159,7 +1188,7 @@ const HomeMapPreview: React.FC<HomeMapPreviewProps> = ({
         provider={PROVIDER_GOOGLE}
         style={StyleSheet.absoluteFill}
         showsUserLocation={USE_DEVICE_LOCATION && locationPermissionGranted && !locationPermissionDenied}
-        followsUserLocation={USE_DEVICE_LOCATION && locationPermissionGranted && !locationPermissionDenied && !interactive}
+        followsUserLocation={false}
         showsMyLocationButton={
           USE_DEVICE_LOCATION &&
           interactive &&
@@ -1182,11 +1211,35 @@ const HomeMapPreview: React.FC<HomeMapPreviewProps> = ({
         onPanDrag={interactive ? handleMapPan : undefined}
         onTouchStart={interactive ? handleMapTouchStart : undefined}
       >
+        {normalizedRoutePolyline.length >= 2 ? (
+          <Polyline
+            coordinates={normalizedRoutePolyline}
+            strokeColor="#1F1F1F"
+            strokeWidth={5}
+            lineCap="round"
+            lineJoin="round"
+          />
+        ) : null}
+        {routeOriginCoordinate ? (
+          <Marker
+            coordinate={routeOriginCoordinate}
+            anchor={{ x: 0.5, y: 0.5 }}
+            tracksViewChanges={false}
+          >
+            <View style={styles.routeOriginOuter}>
+              <View style={styles.routeOriginInner} />
+            </View>
+          </Marker>
+        ) : null}
         {focusCoordinate && (
           <Marker
             coordinate={focusCoordinate}
-            title="선택한 위치"
-            description="이 위치 기준으로 지도를 둘러보고 있어요."
+            title={normalizedRoutePolyline.length >= 2 ? '도착지' : '선택한 위치'}
+            description={
+              normalizedRoutePolyline.length >= 2
+                ? '길찾기 목적지예요.'
+                : '이 위치 기준으로 지도를 둘러보고 있어요.'
+            }
           />
         )}
         {markerElements}
@@ -1208,7 +1261,6 @@ const HomeMapPreview: React.FC<HomeMapPreviewProps> = ({
         clusterHintOpacity={clusterHintOpacity}
         showLoadingBadge={showLoadingBadge}
         loadingBadgeOpacity={loadingBadgeOpacity}
-        markersLoading={markersLoading}
         markersError={
           (locationStatus === 'denied' || locationStatus === 'unavailable') &&
           !lastKnownUserLocationRef.current
@@ -1216,7 +1268,7 @@ const HomeMapPreview: React.FC<HomeMapPreviewProps> = ({
             : markersError
         }
         onRetryMarkers={retryMarkers}
-        showCta={!interactive && !!onPressMap}
+        showCta={false}
         onPressMap={onPressMap}
         locationPromptStatus={
           !lastKnownUserLocationRef.current &&
@@ -1245,7 +1297,7 @@ const styles = StyleSheet.create({
     minHeight: 220,
     borderRadius: 16,
     overflow: 'hidden',
-    marginTop: 24,
+    marginTop: 6,
     backgroundColor: HOME_COLORS.skeletonStrong,
   },
   cardInteractive: {
@@ -1263,6 +1315,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     width: 64,
   },
+  storePinSelected: {
+    transform: [{ scale: 1.04 }],
+  },
   storePinImageWrap: {
     width: 54,
     height: 54,
@@ -1278,6 +1333,13 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 5,
   },
+  storePinImageWrapSelected: {
+    borderColor: '#f7efe2',
+    borderWidth: 3,
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 7,
+  },
   storePinHead: {
     backgroundColor: HOME_COLORS.mapAccent,
     borderRadius: 24,
@@ -1290,6 +1352,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 3,
     elevation: 4,
+  },
+  storePinHeadSelected: {
+    backgroundColor: '#df7a5b',
   },
   storePinLabel: {
     color: HOME_COLORS.textOnDark,
@@ -1306,6 +1371,9 @@ const styles = StyleSheet.create({
     borderRightColor: 'transparent',
     borderTopColor: HOME_COLORS.mapAccent,
     marginTop: -1,
+  },
+  storePinTailSelected: {
+    borderTopColor: '#df7a5b',
   },
   storePinImage: {
     width: 54,
@@ -1399,5 +1467,25 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     color: HOME_COLORS.textOnDark,
+  },
+  routeOriginOuter: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: '#ffffff',
+    borderWidth: 2,
+    borderColor: '#1F1F1F',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: HOME_COLORS.overlayDark,
+    shadowOpacity: 0.18,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  routeOriginInner: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#1F1F1F',
   },
 });

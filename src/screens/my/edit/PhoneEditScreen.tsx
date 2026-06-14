@@ -7,7 +7,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import AppLayout from '../../../components/layout/AppLayout';
 import type { RootStackParamList } from '../../../navigation/MainNavigation';
 import { useAuth } from '../../../auth/AuthProvider';
-import { updateUserPhone } from '../../../api/userApi';
+import { updateMyUserProfile } from '../../../api/userApi';
 import { logProfileHistory } from '../../../utils/profileHistoryLogger';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -16,7 +16,7 @@ type Route = RouteProp<RootStackParamList, 'EditPhone'>;
 const PhoneEditScreen: React.FC = () => {
   const navigation = useNavigation<Nav>();
   const route = useRoute<Route>();
-  const { user } = useAuth();
+  const { user, patchUser, refreshUser } = useAuth();
   const initialPhoneRef = useRef(route.params?.initialValue ?? user?.phone ?? '');
   const [phone, setPhone] = useState(initialPhoneRef.current || '010-1234-5678');
   const [saving, setSaving] = useState(false);
@@ -34,7 +34,12 @@ const PhoneEditScreen: React.FC = () => {
         Alert.alert('휴대폰 번호 확인', '010-1234-5678 형식으로 입력해 주세요.');
         return;
       }
-      await updateUserPhone(user.username, trimmed);
+      await updateMyUserProfile({ phone: trimmed });
+      try {
+        await refreshUser();
+      } catch {
+        patchUser({ phone: trimmed, phoneNumber: trimmed });
+      }
       await logProfileHistory(user.username, {
         changeType: 'PHONE',
         before: { phone: initialPhoneRef.current },
@@ -42,7 +47,7 @@ const PhoneEditScreen: React.FC = () => {
         memo: 'PhoneEditScreen',
       });
       navigation.goBack();
-    } catch (e) {
+    } catch {
       Alert.alert('실패', '휴대폰 번호를 저장하지 못했어요.');
     } finally {
       setSaving(false);

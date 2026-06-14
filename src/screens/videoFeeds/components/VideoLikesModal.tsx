@@ -29,7 +29,7 @@ const VideoLikesModal: React.FC<Props> = ({ visible, onClose, storeId }) => {
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
+  const [_hasMore, setHasMore] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const { navigateToProfile } = useProfileNavigation();
   const offsetRef = useRef(0);

@@ -237,6 +237,9 @@ export const useSinglePlayerVideoEngine = <T,>({
 
   const onError = useCallback(
     (err: any) => {
+      if (DEBUG_VIDEO_FEED) {
+        console.warn('[video-feed] playback error', err);
+      }
       updateState({ buffering: false, error: '영상을 불러오지 못했어요.' });
     },
     [updateState],

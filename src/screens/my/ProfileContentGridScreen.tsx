@@ -94,11 +94,10 @@ const ProfileContentGridScreen: React.FC = () => {
         navigation.navigate('VideoFeedScreen', {
           storeId: item.storeId,
           placeId: item.placeId,
-          username: user?.username,
         });
       }
     },
-    [navigation, tab, type, user?.username],
+    [navigation, tab, type],
   );
 
   const fetchItems = useCallback(
